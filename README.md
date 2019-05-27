@@ -36,7 +36,7 @@ We use [Pytorch 1.0.0](https://pytorch.org/) and [Python 3.7.0](https://www.pyth
  
 # Paths:
 We hard-coded some paths (to the data location). For anonymization reasons, we replaced them with fictive paths. 
-So, they won't work for you. A warning will be raised with an indication to the issue. The the code exits. Something 
+So, they won't work for you. A warning will be raised with an indication to the issue. Then, the code exits. Something 
 like this:
 ```python
 warnings.warn("You are accessing an anonymized part of the code. We are going to exit. Come here and fix this "
