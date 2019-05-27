@@ -34,7 +34,7 @@ We use [Pytorch 1.0.0](https://pytorch.org/) and [Python 3.7.0](https://www.pyth
 ./dependencies) for a way on how to install the requirements within a virtual environment. 
  
 # Paths:
-We did hard-coded some paths (to the data location). For anonymization reasons, we replaced them with fictive paths. 
+We hard-coded some paths (to the data location). For anonymization reasons, we replaced them with fictive paths. 
 So, they won't work for you. A warning will be raised with an indication to the issue. The the code exits. Something 
 like this:
 ```python
