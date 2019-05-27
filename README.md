@@ -1,2 +1,1 @@
-# wsol-min-max-entropy-interpretability
-Pytorch code for: Weakly Supervised Object Localization using Min-Max Entropy: an Interpretable Framework
+# Pytorch 1.0.0 code for: Weakly Supervised Object Localization using Min-Max Entropy: an Interpretable Framework
