@@ -47,7 +47,7 @@ warnings.warn("You are accessing an anonymized part of the code. We are going to
 # Configuration used in the paper:
 The yaml files in [./config_yaml](./config_yaml) are used for each dataset.
 
-# To tun the code:
+# To run the code:
 ```bash
 python train_deepmil.py --cudaid your_cuda_id --yaml basename_your_yaml_file
 ```
