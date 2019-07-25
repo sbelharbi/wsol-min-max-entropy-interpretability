@@ -8,6 +8,9 @@ import warnings
 import sys
 import yaml
 import random
+import socket
+import getpass
+from collections import OrderedDict
 
 import pickle as pkl
 
@@ -16,16 +19,18 @@ from torch.utils.data import DataLoader
 from deepmil.train import train_one_epoch
 from deepmil.train import validate
 
-from tools import get_exp_name, copy_code, log, final_processing
+from tools import get_exp_name, copy_code, log, final_processing, load_pre_pretrained_model
 from tools import get_device, get_rootpath_2_dataset, create_folders_for_exp
-from tools import get_yaml_args, init_stats, plot_hist_probs_pos_neg, plot_roc_curve
+from tools import get_yaml_args, init_stats, plot_hist_probs_pos_neg, plot_roc_curve, get_cpu_device
 from tools import get_transforms_tensor, get_train_transforms_img, plot_curves, announce_msg, superpose_curves
+from tools import check_if_allow_multgpu_mode, copy_model_state_dict_from_gpu_to_cpu, get_state_dict
 
-from loader import csv_loader, PhotoDataset, default_collate
+from loader import csv_loader, PhotoDataset, default_collate, MyDataParallel
 
 from instantiators import instantiate_models, instantiate_optimizer, instantiate_train_loss, instantiate_eval_loss
 
 import torch
+import torch.nn as nn
 
 import reproducibility
 
@@ -34,12 +39,23 @@ import reproducibility
 FACTOR_MUL_WORKERS = 2  # args.num_workers * this_factor. Useful when setting set_for_eval to False, batch size =1,
 # and we are in an evaluation mode (to go faster and coop with the lag between the CPU and GPU).
 DEBUG_MODE = False  # Can be activated only for "Caltech-UCSD-Birds-200-2011" dataset to go fast. If True,
-# we select only few samples for training, validation.
+# we select only few samples for training, validation, and test.
 PLOT_STATS = False
+
+
 reproducibility.set_seed(None)  # use the default seed. Copy the see into the os.environ("MYSEED")
+
+NBRGPUS = torch.cuda.device_count()
+
+ALLOW_MULTIGPUS = check_if_allow_multgpu_mode()
 
 
 def _init_fn(worker_id):
+    """
+    Init. function for the worker in dataloader.
+    :param worker_id:
+    :return:
+    """
     pass
     # np.random.seed(int(os.environ["MYSEED"]))
     # random.seed(int(os.environ["MYSEED"]))
@@ -69,6 +85,7 @@ if __name__ == "__main__":
     # ==================================================
 
     DEVICE = get_device(args)
+    CPUDEVICE = get_cpu_device()
 
     # TODO:
     #  In the case where the train loss is regularized, check if using the same loss for model selection is better than
@@ -77,12 +94,20 @@ if __name__ == "__main__":
     # TODO: use the same total loss. Fix totalloss to adjust automatically to the number of inputs.
     CRIT_EV = instantiate_eval_loss(args).to(DEVICE)
 
-    OUTD = join("./exps/",
+    FOLDER = '.'
+
+    OUTD = join(FOLDER, "exps",
                 # "nbr_erase-{}-".format(args.nbr_times_erase),
-                "PID-{}-{}-kmax-kmin-{}-dout-{}-erase-nbr-{}-at-epoch-{}-max-epochs-{}-stepsize-"
-                "{}-nbr-modalitities-{}-lr-{}".format(os.getpid(),
-        get_exp_name(args), args.model["kmax"], args.model["dropout"], args.nbr_times_erase, args.epoch_start_erasing,
-        args.max_epochs, args.optimizer["lr_scheduler"]["step_size"], args.model["modalities"], args.optimizer["lr"]))
+                "PID-{}-{}-bsz-{}-kmax-kmin-{}-dout-{}-erase-nbr-{}-at-epoch-{}-max-epochs-{}-stepsize-"
+                "{}-nbr-modalitities-{}-lr-{}-mx-epochs-{}".format(
+                    os.getpid(), get_exp_name(args), args.batch_size, args.model["kmax"], args.model["dropout"],
+                    args.nbr_times_erase,
+                    args.epoch_start_erasing, args.max_epochs, args.optimizer["lr_scheduler"]["step_size"],
+                    args.model["modalities"], args.optimizer["lr"], args.max_epochs
+                ))
+
+    if not os.path.exists(OUTD):
+        os.makedirs(OUTD)
 
     OUTD_TR = create_folders_for_exp(OUTD, "train")
     OUTD_VL = create_folders_for_exp(OUTD, "validation")
@@ -156,9 +181,17 @@ if __name__ == "__main__":
     if DEBUG_MODE and (args.dataset == "Caltech-UCSD-Birds-200-2011"):
         reproducibility.force_seed(int(os.environ["MYSEED"]))
         warnings.warn("YOU ARE IN DEBUG MODE!!!!")
-        train_samples = random.sample(train_samples, 500)
-        valid_samples = random.sample(valid_samples, 200)
-        # test_samples = test_samples[:600]
+        train_samples = random.sample(train_samples, 100)
+        valid_samples = random.sample(valid_samples, 5)
+        test_samples = test_samples[:20]
+        reproducibility.force_seed(int(os.environ["MYSEED"]))
+
+    if DEBUG_MODE and (args.dataset == "glas"):
+        reproducibility.force_seed(int(os.environ["MYSEED"]))
+        warnings.warn("YOU ARE IN DEBUG MODE!!!!")
+        train_samples = random.sample(train_samples, 20)
+        valid_samples = random.sample(valid_samples, 5)
+        test_samples = test_samples[:20]
         reproducibility.force_seed(int(os.environ["MYSEED"]))
 
     # TODO:
@@ -186,7 +219,8 @@ if __name__ == "__main__":
     )
 
     reproducibility.force_seed(int(os.environ["MYSEED"]))
-    train_loader = DataLoader(trainset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers,
+    train_loader = DataLoader(trainset, batch_size=args.batch_size, shuffle=True,
+                              num_workers=args.num_workers,
                               pin_memory=True, worker_init_fn=_init_fn, collate_fn=default_collate)
 
     reproducibility.force_seed(int(os.environ["MYSEED"]))
@@ -200,8 +234,33 @@ if __name__ == "__main__":
     reproducibility.force_seed(int(os.environ["MYSEED"]))
     model = instantiate_models(args)
 
+    # Check if we are using a user specific pre-trained model other than our pre-defined pre-trained models.
+    # This can be used to to EVALUATE a trained model. You need to set args.max_epochs to -1 so no training is
+    # performed. This is a hack to avoid creating other function to deal with LATER-evaluation after this code is done.
+    # This script is intended for training. We evaluate at the end. However, if you missed something during the
+    # training/evaluation (for example plot something over the predicted images), you do not need to re-train the
+    # model. You can 1. specify the path to the pre-trained model. 2. Set max_epochs to -1. 3. Set strict to True. By
+    # doing this, we load the pre-trained model, and, we skip the training loop, fast-forward to the evaluation.
+
+    if hasattr(args, "path_pre_trained"):
+        warnings.warn("You have asked to load a specific pre-trained model from {} .... [OK]".format(
+            args.path_pre_trained))
+        model = load_pre_pretrained_model(model=model, path_file=args.path_pre_trained, strict=args.strict)
+
+    # best_model = deepcopy(model)  # Copy the model to device (0) before applying multi-gpu (in case it is one).
+    # best_model.to(DEVICE)
+    # best_state_dict = copy_model_state_dict_from_gpu_to_cpu(model)
+
+    # Check if there are multiple GPUS.
+    if ALLOW_MULTIGPUS:
+        model = MyDataParallel(model)
+        if args.batch_size < NBRGPUS:
+            warnings.warn("You asked for MULTIGPU mode. However, your batch size {} is smaller than the number of "
+                          "GPUs available {}. This is fine in practice. However, some GPUs will be idol. "
+                          "This is just a warning .... [OK]".format(args.batch_size, NBRGPUS))
     model.to(DEVICE)
-    best_model = deepcopy(model)  # Note: the copied model is on the same device as 'model'.
+    # Copy the model's params.
+    best_state_dict = deepcopy(model.state_dict())  # it has to be deepcopy.
 
     # ############################### Instantiate optimizer #################################
     reproducibility.force_seed(int(os.environ["MYSEED"]))
@@ -222,7 +281,7 @@ if __name__ == "__main__":
     tx0 = dt.datetime.now()
 
     for epoch in range(args.max_epochs):
-        # IN THE FUTURE: DO NOT USE MAX_EPOCHS IN THE COMPUTATION OF THE CURRENT SEED!!!!
+        # TODO: IN THE FUTURE: DO NOT USE MAX_EPOCHS IN THE COMPUTATION OF THE CURRENT SEED!!!!
         # REPLACE IT WITH A CONSTANT (400 IN OUR CASE ON GLAS)
         reproducibility.force_seed(int(os.environ["MYSEED"]) + (epoch + 1) * 10000 + 400)
         trainset.set_up_new_seeds()
@@ -232,9 +291,6 @@ if __name__ == "__main__":
         # Start the training with fresh seeds.
         reproducibility.force_seed(int(os.environ["MYSEED"]) + (epoch + 3) * 10000 + 400)
 
-        if lr_scheduler:
-            lr_scheduler.step(epoch)
-
         if epoch >= args.epoch_start_erasing:  # activate the erasing.
             model.nbr_times_erase = model.nbr_times_erase_backup
         else:  # deactivate the erasing.
@@ -242,8 +298,10 @@ if __name__ == "__main__":
 
         reproducibility.force_seed(int(os.environ["MYSEED"]) + (epoch + 4) * 10000 + 400)
         tr_stats = train_one_epoch(model, optimizer, train_loader, CRIT_TR, DEVICE, tr_stats, epoch,
-                                   callback, training_log)
+                                   callback, training_log, ALLOW_MULTIGPUS=ALLOW_MULTIGPUS, NBRGPUS=NBRGPUS)
 
+        if lr_scheduler:  # for > 1.1 : opt.step() then l_r_s.step().
+            lr_scheduler.step(epoch)
         # TODO: Which criterion to use over the validation set? (in case this loss is used for model selection).
         # Eval validation set.
         reproducibility.force_seed(int(os.environ["MYSEED"]) + (epoch + 5) * 10000 + 400)
@@ -266,8 +324,10 @@ if __name__ == "__main__":
         if error_vl <= best_val_error:  # and loss <= best_val_loss:
             best_val_error = error_vl
             best_val_loss = vl_stats["loss_pos"][-1]
-            best_model.load_state_dict(model.state_dict())
-            torch.save(best_model.state_dict(), join(OUTD, "best_model.pt"))
+            best_state_dict = deepcopy(model.state_dict())  # it has to be deepcopy.
+
+            # Expensive operation: disc I/O.
+            # torch.save(best_model.state_dict(), join(OUTD, "best_model.pt"))
             best_epoch = epoch
 
         if PLOT_STATS:
@@ -307,6 +367,9 @@ if __name__ == "__main__":
     # Classification errors using the best model over: train/valid/test sets.
     # Train: needs to reload it with eval-transformations, not train-transformations.
 
+    # Reset the models parameters to the best found ones.
+    model.load_state_dict(best_state_dict)
+
     # We need to do each set sequentially to free the memory.
 
     announce_msg("End training. Time: {}".format(dt.datetime.now() - tx0))
@@ -341,13 +404,17 @@ if __name__ == "__main__":
 
         reproducibility.force_seed(int(os.environ["MYSEED"]))
         final_processing(
-            best_model,
+            model,
             test_loader,
             testset,
             "Test",
             validate, CRIT_EV, DEVICE, best_epoch, callback, results_log, OUTD, args, save_pred_for_later_comp=True
         )
         reproducibility.force_seed(int(os.environ["MYSEED"]))
+
+        # Move the state dict of the best model into CPU, then save it.
+        best_state_dict_cpu = copy_model_state_dict_from_gpu_to_cpu(model)
+        torch.save(best_state_dict_cpu, join(OUTD, "best_model.pt"))
 
         announce_msg("End final processing. Time: {}".format(dt.datetime.now() - tx0))
 
@@ -360,7 +427,7 @@ if __name__ == "__main__":
 
     reproducibility.force_seed(int(os.environ["MYSEED"]))
     final_processing(
-        best_model,
+        model,
         valid_loader,
         validset,
         "Validation",
@@ -386,7 +453,7 @@ if __name__ == "__main__":
 
     reproducibility.force_seed(int(os.environ["MYSEED"]))
     final_processing(
-        best_model,
+        model,
         test_loader,
         testset,
         "Test",
@@ -412,7 +479,7 @@ if __name__ == "__main__":
 
     reproducibility.force_seed(int(os.environ["MYSEED"]))
     final_processing(
-        best_model,
+        model,
         train_eval_loader,
         trainset_eval,
         "Train",
@@ -428,6 +495,9 @@ if __name__ == "__main__":
     with open(join(OUTD, "train_stats.pkl"), "wb") as fout:
         pkl.dump(stats_to_dump, fout, protocol=pkl.HIGHEST_PROTOCOL)
 
+    # Move the state dict of the best model into CPU, then save it.
+    best_state_dict_cpu = copy_model_state_dict_from_gpu_to_cpu(model)
+    torch.save(model.state_dict(), join(OUTD, "best_model.pt"))
     announce_msg("End final processing. Time: {}".format(dt.datetime.now() - tx0))
 
     announce_msg("*END*")

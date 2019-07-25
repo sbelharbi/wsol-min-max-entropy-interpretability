@@ -11,13 +11,13 @@ import torch
 import torch.nn.functional as F
 
 from tools import AverageMeter
-from tools import log
+from tools import log, compute_dice_index
 
 import reproducibility
 
 
 def train_one_epoch(model, optimizer, dataloader, criterion, device, tr_stats, epoch=0, callback=None,
-                    log_file=None):
+                    log_file=None, ALLOW_MULTIGPUS=False, NBRGPUS=1):
     """
     Perform one epoch of training.
     :param model:
@@ -28,6 +28,7 @@ def train_one_epoch(model, optimizer, dataloader, criterion, device, tr_stats, e
     :param epoch:
     :param callback:
     :param log_file:
+    :param ALLOW_MULTIGPUS: bool. If True, we are in multiGPU mode.
     :return:
     """
     model.train()
@@ -50,15 +51,47 @@ def train_one_epoch(model, optimizer, dataloader, criterion, device, tr_stats, e
 
         # Optimization:
         if model.nbr_times_erase == 0:  # no erasing.
-            output = model(data)  # --> out_pos, out_neg, masks
-            _, _, _, scores_seg, _ = output
-            l_c_s = criterion.loss_class_head_seg(scores_seg, labels)
+            if not ALLOW_MULTIGPUS:
+                assert NBRGPUS <= 1, "Something wrong. You deactivated multigpu mode, but we find {} GPUs. This will " \
+                                     "not guarantee reproducibility. We do not know why you did that. Exiting " \
+                                     ".... [NOT OK]".format(NBRGPUS)
+                seeds_threads = None
+            else:
+                assert NBRGPUS > 1, "Something is wrong. You asked for multigpu mode. But, we found {} GPUs. Exiting " \
+                                    ".... [NOT OK]".format(NBRGPUS)
+                # The seeds are generated randomly before calling the threads.
+                reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
+                seeds_threads = torch.randint(0, np.iinfo(np.uint32).max + 1, (NBRGPUS, )).to(device)
+                reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
+                prngs_cuda = []
+                # Create different prng states of cuda before forking.
+                for seed in seeds_threads:
+                    # get the corresponding state of the cuda prng with respect to the seed.
+                    torch.manual_seed(seed)
+                    torch.cuda.manual_seed(seed)
+                    prngs_cuda.append(torch.cuda.get_rng_state())
+                reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
 
+            reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
+            output = model(x=data, seed=seeds_threads, prngs_cuda=torch.stack(prngs_cuda))  # --> out_pos, out_neg,
+            reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
+            # masks
+            _, _, _, scores_seg, _ = output
+            reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
+            l_c_s = criterion.loss_class_head_seg(scores_seg, labels)
+            reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
+
+            reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
             loss = criterion(output, labels)
+            reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
             t_l, l_p, l_n = loss
-            # print("\t \t \t \t \t {} \t {} \t {} \t {}".format(t_l.item(), l_p.item(), l_n.item(), l_a.item()))
+            # print("\t \t \t \t \t {} \t {} \t {}".format(t_l.item(), l_p.item(), l_n.item()))
             t_l = t_l + l_c_s
+            reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
             t_l.backward()
+            reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
+            # torch.cuda.set_rng_state_all(prng_state_all)
+            # torch.cuda.set_rng_state(prng_state)
         else:  # we need to erase some times.
             # Compute the cumulative mask.
             l_c_s = 0.
@@ -75,12 +108,45 @@ def train_one_epoch(model, optimizer, dataloader, criterion, device, tr_stats, e
                 if er >= model.nbr_times_erase:  # if we exceed the maximum, stop looping. We are not looping
                     # forever!! aren't we?
                     break
-                mask, scores_seg, _ = model.segment(data)  # mask is detached! (mask is continuous)
-                mask, _, _ = model.get_mask_xpos_xneg(data, mask)  # mask = M+.
+                if not ALLOW_MULTIGPUS:
+                    assert NBRGPUS <= 1, "Something wrong. You deactivated multigpu mode, but we find {} GPUs. This " \
+                                         "will not guarantee reproducibility. We do not know why you did that. " \
+                                         "Exiting .... [NOT OK]".format(NBRGPUS)
+                    seeds_threads = None
+                else:
+                    assert NBRGPUS > 1, "Something is wrong. You asked for multigpu mode. But, we found {} GPUs. " \
+                                        "Exiting .... [NOT OK]".format(NBRGPUS)
+                    # The seeds are generated randomly before calling the threads.
+                    reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
+                    seeds_threads = torch.randint(0, np.iinfo(np.uint32).max + 1, (NBRGPUS,)).to(device)
+                    reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
+                    prngs_cuda = []
+                    # Create different prng states of cuda before forking.
+                    for seed in seeds_threads:
+                        # get the corresponding state of the cuda prng with respect to the seed.
+                        torch.manual_seed(seed)
+                        torch.cuda.manual_seed(seed)
+                        prngs_cuda.append(torch.cuda.get_rng_state())
+                    reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
+
+                reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
+                mask, scores_seg, _ = model(x=data, code="segment", seed=seeds_threads,
+                                            prngs_cuda=torch.stack(prngs_cuda))  # model.segment(data) mask is
+                # detached! (mask is continuous)
+                reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
+                mask, _, _ = model(x=data, code="get_mask_xpos_xneg", mask_c=mask, seed=seeds_threads,
+                                   prngs_cuda=torch.stack(prngs_cuda))  #
+                reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
+                # model.get_mask_xpos_xneg(data, mask)  # mask = M+.
+
                 probs_seg = criterion.softmax(scores_seg)
+                reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
 
                 l_c_s_tmp = criterion.loss_class_head_seg_red_none(scores_seg, labels)
+                reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
                 l_c_s_tmp.mean().backward()
+                reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
+                # print("Loop: \t \t \t \t \t {}".format(l_c_s_tmp.mean().item()))
 
                 # avoid maintaining the previous graph. Therefore,
                 # cut the dependency.
@@ -88,6 +154,7 @@ def train_one_epoch(model, optimizer, dataloader, criterion, device, tr_stats, e
                 probs_seg = probs_seg.detach()
 
                 l_c_s += l_c_s_tmp.mean()  # for tracking only.
+                reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
 
                 # Update the mask (m_pos: M+): The negative mask is expected to contain all the non-discriminative
                 # regions. However, it may still contain some discriminative parts. In order to find them, we apply M-
@@ -122,6 +189,7 @@ def train_one_epoch(model, optimizer, dataloader, criterion, device, tr_stats, e
                 # Apply the cumulative negative mask over the image
                 data = data * (1 - m_pos) * (trust != 0).type(torch.float) + data * (trust == 0).type(torch.float)
                 er += 1
+                reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
 
             l_c_s /= (model.nbr_times_erase + 1)
 
@@ -132,18 +200,51 @@ def train_one_epoch(model, optimizer, dataloader, criterion, device, tr_stats, e
             x_pos = data_safe * m_pos
 
             # Classify
-            out_pos = model.classify(x_pos)
-            out_neg = model.classify(x_neg)
+            if not ALLOW_MULTIGPUS:
+                assert NBRGPUS == 1, "Something wrong. You deactivated multigpu mode, but we find {} GPUs. This " \
+                                     "will not guarantee reproducibility. We do not know why you did that. " \
+                                     "Exiting .... [NOT OK]".format(NBRGPUS)
+                seeds_threads = None
+            else:
+                assert NBRGPUS > 1, "Something is wrong. You asked for multigpu mode. But, we found {} GPUs. " \
+                                    "Exiting .... [NOT OK]".format(NBRGPUS)
+                # The seeds are generated randomly before calling the threads.
+                reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
+                seeds_threads = torch.randint(0, np.iinfo(np.uint32).max + 1, (NBRGPUS,)).to(device)
+                reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
+                prngs_cuda = []
+                # Create different prng states of cuda before forking.
+                for seed in seeds_threads:
+                    # get the corresponding state of the cuda prng with respect to the seed.
+                    torch.manual_seed(seed)
+                    torch.cuda.manual_seed(seed)
+                    prngs_cuda.append(torch.cuda.get_rng_state())
+                reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
+
+            reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
+            out_pos = model(x=x_pos, code="classify", seed=seeds_threads,
+                            prngs_cuda=torch.stack(prngs_cuda))  # model.classify(x_pos)
+            reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
+            out_neg = model(x=x_neg, code="classify", seed=seeds_threads,
+                            prngs_cuda=torch.stack(prngs_cuda))  # model.classify(x_neg)
+            reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
 
             output = out_pos, out_neg, None, None, None
+            reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
             loss = criterion(output, labels)
+
             t_l, l_p, l_n = loss
+            reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
             t_l.backward()
             t_l += l_c_s
+            # print("ERASE: \t \t \t \t \t {} \t {} \t {}".format(t_l.item(), l_p.item(), l_n.item()))
+            reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
 
         # Update params.
+        reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
         optimizer.step()
-        # End optimization
+        reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
+        # End optimization.
 
         total_loss.append(t_l.item())
         loss_pos.append(l_p.item())
@@ -190,7 +291,7 @@ def validate(model, dataset, dataloader, criterion, device, stats, epoch=0, call
     model.eval()
 
     total_loss, loss_pos, loss_neg = AverageMeter(), AverageMeter(), AverageMeter()
-    loss_class_seg, loss_dice = AverageMeter(), AverageMeter()
+    loss_class_seg, f1pos, f1neg = AverageMeter(), AverageMeter(), AverageMeter()
     errors = AverageMeter()
 
     length = len(dataloader)
@@ -204,6 +305,10 @@ def validate(model, dataset, dataloader, criterion, device, stats, epoch=0, call
 
     with torch.no_grad():
         for i, (data, mask, label) in tqdm.tqdm(enumerate(dataloader), ncols=80, total=length):
+            # TODO: FUTURE allow parallel validation over mutliple GPUs with samples with different sizes. Make the
+            #  batch as a list for validation for instance. It does not make sens to validayte sample by sample while
+            #  you are able to run multiple forwards at once. An alternative is to create a particular dataparallel
+            #  that loops over a list instead of batch-size dim.
             reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch)
 
             assert data.size()[0] == 1, "Expected a batch size of 1. Found `{}`  .... [NOT OK]".format(data.size()[0])
@@ -214,7 +319,9 @@ def validate(model, dataset, dataloader, criterion, device, stats, epoch=0, call
 
             mask_t = [m.to(device) for m in mask]
 
-            output = model(data)  # --> out_pos, out_neg, masks
+            # In validation, we do not need reproducibility since everything is expected to deterministic. Plus,
+            # we use only one gpu since the batch size os 1.
+            output = model(x=data, seed=None)  # --> out_pos, out_neg, masks
 
             out_pos = output[0][0][0]  # scores: take the first element of the batch.
             out_neg = output[1][0][0]  # scores: take the first element of the batch.
@@ -239,8 +346,8 @@ def validate(model, dataset, dataloader, criterion, device, stats, epoch=0, call
                 assert dataset.padding_size is None, "dataset.padding_size is supposed to be None. We do not support" \
                                                      "padding of this type for this dataset."
 
-                # Important: we assume that dataloader of this dataset is not shuffled to make this access using (i)
-                # valid. If shuffled, the access is not correct.
+                # Important: we assume that dataloader of this dataset is not shuffled to make this access using the
+                # index (i) correct. If shuffled, the access is not correct.
                 w_mask_no_pad_forced, h_mask_no_pad_forced = dataset.original_images_size[i]
 
                 if dataset.force_div_32:
@@ -249,7 +356,7 @@ def validate(model, dataset, dataloader, criterion, device, stats, epoch=0, call
                                                            dataset.up_scale_small_dim_to)
                     # Remove the padded parts by cropping at the center.
                     mask_pred = mask_pred[int(hp / 2) - int(h_up / 2): int(hp / 2) + int(h_up / 2) + (h_up % 2),
-                                int(wp / 2) - int(w_up / 2):int(wp / 2) + int(w_up / 2) + (w_up % 2)]
+                                          int(wp / 2) - int(w_up / 2): int(wp / 2) + int(w_up / 2) + (w_up % 2)]
                     assert mask_pred.shape[0] == h_up, "h_up={}, mask_pred.shape[0]={}. Expected to be the same." \
                                                        "[Not OK]".format(h_up, mask_pred.shape[0])
                     assert mask_pred.shape[1] == w_up, "w_up={}, mask_pred.shape[1]={}. Expected to be the same." \
@@ -262,23 +369,33 @@ def validate(model, dataset, dataloader, criterion, device, stats, epoch=0, call
 
                 # Now get the correct sizes:
                 hp, wp = mask_pred.shape
-                assert hp == h, "hp={}, h={} are suppored to be the same! .... [NOT OK]".format(hp, h)
-                assert wp == w, "wp={}, w={} are suppored to be the same! .... [NOT OK]".format(wp, w)
+                assert hp == h, "hp={}, h={} are supposed to be the same! .... [NOT OK]".format(hp, h)
+                assert wp == w, "wp={}, w={} are supposed to be the same! .... [NOT OK]".format(wp, w)
 
             if (h != hp) or (w != wp):  # This means that we have padded the input image.
                 # We crop the predicted mask in the center.
                 mask_pred = mask_pred[int(hp / 2) - int(h / 2): int(hp / 2) + int(h / 2) + (h % 2),
-                                      int(wp / 2) - int(w / 2):int(wp / 2) + int(w / 2) + (w % 2)]
+                                      int(wp / 2) - int(w / 2): int(wp / 2) + int(w / 2) + (w % 2)]
             masks_pred.append(mask_pred)
 
             loss = criterion(output, label, mask_t)
-            t_l, l_p, l_n, l_d, l_c_s = loss
+            t_l, l_p, l_n, l_c_s = loss
 
             total_loss.append(t_l.item())
             loss_pos.append(l_p.item())
             loss_neg.append(l_n.item())
             loss_class_seg.append(l_c_s.item())
-            loss_dice.append(l_d.item())
+            # We no longer compute the dice in the losseval, since masks need some transformations before being ready
+            # for dice computations. Such transformations are dataset-dependent and we do not want to crowd the eval
+            # loss. It must be clean. Now, Dice is computed over CPU using a dice function.
+
+            x1 = ((np.ravel(mask[0]) >= 0.5) * 1.).astype(np.float32)
+            x2 = ((np.ravel(mask_pred) >= 0.5) * 1.).astype(np.float32)
+            # Since F1 and Dice index are the same over binary data, and, for computation time reasons (Dice index is
+            # way faster than F1 in ter of speed), we decided to call Dice function.
+            # Note: in practice, there maybe a difference in ter of precision (e.g., 1e-7).
+            f1pos.append(compute_dice_index(x1, x2))
+            f1neg.append(compute_dice_index(1. - x1, 1. - x2))
 
             errors.append((pred_label != label).item())
 
@@ -287,11 +404,11 @@ def validate(model, dataset, dataloader, criterion, device, stats, epoch=0, call
         callback.scalar('Val_error', epoch + 1, errors.avg)
 
     to_write = ">>>>>>>>>>>>>>>>>> Total L.avg: {:.5f}, Pos.L.avg: {:.5f}, Neg.L.avg: {:.5f}, " \
-               "Cl.Seg.L.avg: {:.5f}, D.L.avg: {:.5f}, Error.avg: {:.2f}, t:{}, Eval {} epoch {:>2d}, " \
+               "Cl.Seg.L.avg: {:.5f}, F1+: {:.5f}, F1-: {:.5f}, Error.avg: {:.2f}, t:{}, Eval {} epoch {:>2d}, " \
                "".format(
                 total_loss.avg, loss_pos.avg, loss_neg.avg, loss_class_seg.avg,
-                loss_dice.avg, errors.avg * 100, dt.datetime.now() - t0, name_set, epoch
-    )
+                f1pos.avg, f1neg.avg, errors.avg * 100, dt.datetime.now() - t0, name_set, epoch
+                )
     print(to_write)
     if log_file:
         log(log_file, to_write)
@@ -302,7 +419,8 @@ def validate(model, dataset, dataloader, criterion, device, stats, epoch=0, call
     stats["loss_neg"] = np.append(stats["loss_neg"], np.array(loss_neg.values))
     stats["loss_class_seg"] = np.append(stats["loss_class_seg"], np.array(loss_class_seg.values))
     stats["errors"] = np.append(stats["errors"], np.array(errors.values).mean() * 100)
-    stats["loss_dice"] = np.append(stats["loss_dice"], np.array(loss_dice.values).mean() * 100)
+    stats["f1pos"] = np.append(stats["f1pos"], np.array(f1pos.values).mean() * 100)
+    stats["f1neg"] = np.append(stats["f1neg"], np.array(f1neg.values).mean() * 100)
     pred = {
         "predictions": predictions,
         "labels": labels,
@@ -320,7 +438,8 @@ def validate(model, dataset, dataloader, criterion, device, stats, epoch=0, call
         "loss_neg": np.array(loss_neg.values),
         "loss_class_seg": np.array(loss_class_seg.values),
         "errors": np.array(errors.values).mean() * 100,
-        "loss_dice": np.array(loss_dice.values)
+        "f1pos": np.array(f1pos.values),
+        "f1neg": np.array(f1neg.values)
     }
 
     return stats, stats_now, pred

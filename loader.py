@@ -3,6 +3,7 @@ from os.path import join
 import collections
 import copy
 import warnings
+import datetime as dt
 
 import PIL
 from PIL import Image
@@ -65,6 +66,40 @@ def csv_loader(fname, rootpath):
     with open(fname, 'r') as f:
         out = [[join(rootpath, row[0]), join(rootpath, row[1]), row[2]] for row in csv.reader(f)]
     return out
+
+
+class MyDataParallel(torch.nn.DataParallel):
+    """
+    Allow nn.DataParallel to call model's attributes.
+    """
+    def __getattr__(self, name):
+        try:
+            return super().__getattr__(name)
+        except AttributeError:
+            return getattr(self.module, name)
+
+    def forward(self, *inputs, **kwargs):
+        """
+        The exact same as in Pytorch.
+        We use it for debugging.
+        :param inputs:
+        :param kwargs:
+        :return:
+        """
+        if not self.device_ids:
+            return self.module(*inputs, **kwargs)
+        tx = dt.datetime.now()
+        inputs, kwargs = self.scatter(inputs, kwargs, self.device_ids)
+        # print("Scattering took {}".format(dt.datetime.now() - tx))
+        if len(self.device_ids) == 1:
+            return self.module(*inputs[0], **kwargs[0])
+        tx = dt.datetime.now()
+        replicas = self.replicate(self.module, self.device_ids[:len(inputs)])
+        # print("Replicating took {}".format(dt.datetime.now() - tx))
+        tx = dt.datetime.now()
+        outputs = self.parallel_apply(replicas, inputs, kwargs)
+        # print("Gathering took {}".format(dt.datetime.now() - tx))
+        return self.gather(outputs, self.output_device)
 
 
 class MyRandomCropper(transforms.RandomCrop):
@@ -201,7 +236,7 @@ class PhotoDataset(Dataset):
                 self.resize = resize
 
         if crop_size:
-            self.randomCropper = MyRandomCropper(size=crop_size)
+            self.randomCropper = MyRandomCropper(size=crop_size, padding=0)
         else:
             self.randomCropper = None
 

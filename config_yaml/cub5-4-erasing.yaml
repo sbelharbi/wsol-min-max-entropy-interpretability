@@ -8,12 +8,12 @@ dataset: Caltech-UCSD-Birds-200-2011
 epoch_start_erasing: 1
 erase_in_inference: false
 extension: !!python/tuple [jpeg, JPEG]
-floating: 3
+floating: 2
 fold: 0
 fold_folder: ./folds
 height_tag: 50
 img_extension: bmp
-max_epochs: 400
+max_epochs: -1
 model:
   alpha: 0.0
   dropout: 0.85
@@ -43,12 +43,14 @@ optimizer:
 pad_eval: false
 padding_mode: reflect
 padding_size: null
+path_pre_trained: ../our-pretrained/cub5-4.pt
 preload: true
 rangeh: !!python/tuple [0, 1]
 resize: null
-show_hists: true
+show_hists: false
 sigma_erase: 10
 split: 0
+strict: true
 up_scale_small_dim_to: 500
 use_tags: true
 yaml: caltech-birds.yaml

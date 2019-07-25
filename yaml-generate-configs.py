@@ -45,7 +45,7 @@ config = {
     "floating": 3,  # the number of floating points to print over the maps.
     "height_tag": 50,  # the height of the margin where the tag is written.
     "use_tags": True,  # If True, extra information will be display under the images.
-    "show_hists": True,  # If True, histograms of scores will be displayed as density probability.
+    "show_hists": False,  # If True, histograms of scores will be displayed as density probability.
     "bins": 100,  # int, number of bins in the histogram.
     "rangeh": (0, 1),  # tuple, range of the histogram.
     "extension": ("jpeg", "JPEG"),  # format into which the maps are saved.

@@ -14,7 +14,6 @@ import math
 import csv
 import copy
 import getpass
-import warnings
 
 import yaml
 import numpy as np
@@ -484,6 +483,7 @@ def do_glas():
     warnings.warn("You are accessing an anonymized part of the code. We are going to exit. Come here and fix this "
                   "according to your setup. Issue: absolute path to GlaS dataset.")
     sys.exit(0)
+
     username = getpass.getuser()
     if username == "XXXXXXXXXX":
         baseurl = "/XXXXXXXXX/XXXXXXXXXX/XXXXXXXXXXXXXXX/datasets/GlaS-2015/Warwick QU Dataset (Released 2016_07_08)"
@@ -537,7 +537,7 @@ def do_Caltech_UCSD_Birds_200_2011():
             "img_extension": "bmp",
             "nbr_splits": 2,  # how many times to perform the k-folds over the available train samples.
             "path_encoding": "folds/Caltech-UCSD-Birds-200-2011/encoding-origine.yaml",
-            "nbr_classes": 5  # Keep only 5 random classes.
+            "nbr_classes": None  # Keep only 5 random classes. If you want to use the entire dataset, set this to None.
             }
     args["nbr_folds"] = math.ceil(100. / args["folding"]["vl"])
     split_valid_Caltech_UCSD_Birds_200_2011(Dict2Obj(args))

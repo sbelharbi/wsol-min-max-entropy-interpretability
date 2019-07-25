@@ -1,3 +1,4 @@
+# All credits of Synchronized BN go to Tamaki Kojima(tamakoji@gmail.com) (https://github.com/tamakoji/pytorch-syncbn)
 # DeeplabV3:  L.-C. Chen, G. Papandreou, F. Schroff, and H. Adam.  Re-
 # thinking  atrous  convolution  for  semantic  image  segmenta-
 # tion. arXiv preprint arXiv:1706.05587, 2017..
@@ -27,7 +28,7 @@
 # Input normalization (natural images):
 # https://github.com/CSAILVision/semantic-segmentation-pytorch/blob/28aab5849db391138881e3c16f9d6482e8b4ab38/dataset.py
 
-
+import threading
 import sys
 import math
 import os
@@ -37,16 +38,42 @@ import numbers
 from urllib.request import urlretrieve
 
 import torch
-from torch.nn.parameter import Parameter
 import torch.nn as nn
 from torch.nn import functional as F
+
+from tools import check_if_allow_multgpu_mode, announce_msg
 
 sys.path.append("..")
 
 from deepmil.decision_pooling import WildCatPoolDecision, ClassWisePooling
+thread_lock = threading.Lock()  # lock for threads to protect the instruction that cause randomness and make them
+# thread-safe.
 
-BatchNorm2d = nn.BatchNorm2d
-InPlaceABNSync = nn.BatchNorm2d
+import reproducibility
+
+ACTIVATE_SYNC_BN = True
+# Override ACTIVATE_SYNC_BN using variable environment in Bash:
+# $ export ACTIVATE_SYNC_BN="True"   ----> Activate
+# $ export ACTIVATE_SYNC_BN="False"   ----> Deactivate
+
+if "ACTIVATE_SYNC_BN" in os.environ.keys():
+    ACTIVATE_SYNC_BN = (os.environ['ACTIVATE_SYNC_BN'] == "True")
+
+announce_msg("ACTIVATE_SYNC_BN was set to {}".format(ACTIVATE_SYNC_BN))
+
+if check_if_allow_multgpu_mode() and ACTIVATE_SYNC_BN:  # Activate Synch-BN.
+    from deepmil.syncbn import nn as NN_Sync_BN
+    BatchNorm2d = NN_Sync_BN.BatchNorm2d
+    announce_msg("Synchronized BN has been activated. \n"
+                 "MultiGPU mode has been activated. {} GPUs".format(torch.cuda.device_count()))
+else:
+    BatchNorm2d = nn.BatchNorm2d
+    if check_if_allow_multgpu_mode():
+        announce_msg("Synchronized BN has been deactivated.\n"
+                     "MultiGPU mode has been activated. {} GPUs".format(torch.cuda.device_count()))
+    else:
+        announce_msg("Synchronized BN has been deactivated.\n"
+                     "MultiGPU mode has been deactivated. {} GPUs".format(torch.cuda.device_count()))
 
 # DEFAULT SEGMENTATION PARAMETERS ###########################
 
@@ -161,10 +188,11 @@ class WildCatClassifierHead(nn.Module):
         self.to_maps = ClassWisePooling(num_classes, modalities)
         self.wildcat = WildCatPoolDecision(kmax=kmax, kmin=kmin, alpha=alpha, dropout=dropout)
 
-    def forward(self, x):
+    def forward(self, x, seed=None, prngs_cuda=None):
+
         modalities = self.to_modalities(x)
         maps = self.to_maps(modalities)
-        scores = self.wildcat(maps)
+        scores = self.wildcat(x=maps, seed=seed, prngs_cuda=prngs_cuda)
 
         return scores, maps
 
@@ -268,8 +296,6 @@ class ResNet(nn.Module):
         # ======================================== CLASSIFIER ==========================================
         self.cl32 = WildCatClassifierHead(in_channel32, modalities, num_classes, kmax=kmax, kmin=kmin, alpha=alpha,
                                           dropout=dropout)
-        # self.cl16 = WildCatClassifierHead(in_channel16, modalities, num_classes, kmax=kmax, kmin=kmin, alpha=alpha,
-        #                                  dropout=dropout)
         # ==============================================================================================
 
     def _make_layer(self, block, planes, blocks, stride=1, dilation=1, multi_grid=1):
@@ -289,22 +315,104 @@ class ResNet(nn.Module):
 
         return nn.Sequential(*layers)
 
-    def forward(self, x):
+    def gpu_parallelize(self):
         """
-        Forward function.
-        :param x:
+        Parallelize parts of the model over multiple GPUs.
+        Using nn.DataParallel() over the entire model does not allow accessing model'e attributes.
+        We used loader.MyDataParallel(), however, it raises the following error;
+        RecursionError: maximum recursion depth exceeded while calling a Python object
+
+        Things to parallelize:
+            1. self.conv1
+            2. self.bn1
+            3. self.relu1
+            4. self.conv2
+            5. self.bn2
+            6. self.relu2
+            7. self.conv3
+            8. self.bn3
+            9. self.relu3
+            10. self.maxpool
+            11. self.layer1
+            12. self.layer2
+            13. self.layer3
+            14. self.layer4
+            15. self.headseg
+            16. self.cl32
         :return:
         """
-        # 1. Segment: forward.
-        mask, scores_seg, maps_seg = self.segment(x)  # mask is detached!
+        self.conv1 = nn.DataParallel(self.conv1)
+        self.bn1 = nn.DataParallel(self.bn1)
+        self.relu1 = nn.DataParallel(self.relu1)
+        self.conv2 = nn.DataParallel(self.conv2)
+        self.bn2 = nn.DataParallel(self.bn2)
+        self.relu2 = nn.DataParallel(self.relu2)
+        self.conv3 = nn.DataParallel(self.conv3)
+        self.bn3 = nn.DataParallel(self.bn3)
+        self.relu3 = nn.DataParallel(self.relu3)
+        self.maxpool = nn.DataParallel(self.maxpool)
+        self.layer1 = nn.DataParallel(self.layer1)
+        self.layer2 = nn.DataParallel(self.layer2)
+        self.layer3 = nn.DataParallel(self.layer3)
+        self.layer4 = nn.DataParallel(self.layer4)
+        self.headseg = nn.DataParallel(self.headseg)
+        self.cl32 = nn.DataParallel(self.cl32)
 
-        mask, x_pos, x_neg = self.get_mask_xpos_xneg(x, mask)
+    def forward(self, x, code=None, mask_c=None, seed=None, prngs_cuda=None):
+        """
+        Forward function.
 
-        # 3. Classify.
-        out_pos = self.classify(x_pos)
-        out_neg = self.classify(x_neg)
+        MultiGPU issue: During training, we need at some point to call the following functions:
+        self.get_mask_xpos_xneg(), self.segment(), self.classify().
+        Since we wrap the model within torch.nn.DataParallel, the function parallel_apply() needs to call the model
+        (call self.forward()). Therefore, it makes it complicated to call other functions such as self.segment().
+        To deal with this, de decide to encode the calling of the sub-functions of the model so we can pass every time
+        by self.forward().
+        Code:
+            1. None: standard forward.
+            2. "get_mask_xpos_xneg": call self.get_mask_xpos_xneg()
+            3. "segment": call self.segment()
+            4. "classify": call self.classify()
 
-        return out_pos, out_neg, mask, scores_seg, maps_seg
+
+        :param x: input.
+        :param code: None or a string. See above.
+        :param mask_c: input for self.self.get_mask_xpos_xneg()
+        :param seed: int, a seed for the case of Multigpus to guarantee reproducibility for a fixed number of GPUs.
+        See  https://discuss.pytorch.org/t/did-anyone-succeed-to-reproduce-their-code-when-using-multigpus/47079?u=sbelharbi
+        In the case of one GPU, the seed in not necessary (and it will not be used); se set it to None.
+        :param prngs_cuda: value returned by torch.cuda.get_prng_state().
+        :return:
+        """
+        if code is None:
+            # 1. Segment: forward.
+            mask, scores_seg, maps_seg = self.segment(x=x, seed=seed, prngs_cuda=prngs_cuda)  # mask is detached!
+
+            mask, x_pos, x_neg = self.get_mask_xpos_xneg(x, mask)
+
+            # 3. Classify.
+            # if seed is not None:  # for reproducibility over multiGPUs.
+            #     seed_cl1 = torch.max(seed * 0., seed - 100)
+            #     seed_cl2 = torch.max(seed * 0., seed - 500)
+            # else:
+            #     seed_cl1, seed_cl2 = None, None
+            out_pos = self.classify(x=x_pos, seed=seed, prngs_cuda=prngs_cuda)  # we do not use the same seed.
+            out_neg = self.classify(x=x_neg, seed=seed, prngs_cuda=prngs_cuda)  # we do not use the same seed.
+
+            return out_pos, out_neg, mask, scores_seg, maps_seg
+
+        if code == "get_mask_xpos_xneg":
+            return self.get_mask_xpos_xneg(x, mask_c)
+
+        if code == "segment":
+            return self.segment(x=x, seed=seed, prngs_cuda=prngs_cuda)
+
+        if code == "classify":
+            return self.classify(x=x, seed=seed, prngs_cuda=prngs_cuda)
+
+        raise ValueError("You seem to have figure it out how to use model.forward() using multiGPU. However, "
+                         "you provided an unsupported code {}. Please double check. This is the list of supported "
+                         "codes: None, 'get_mask_xpos_xneg', 'segment', 'classify'. Exiting .... [NOT OK]")
 
     def get_mask_xpos_xneg(self, x, mask_c):
         """
@@ -319,7 +427,7 @@ class ResNet(nn.Module):
 
         return mask, x_pos, x_neg
 
-    def segment(self, x):
+    def segment(self, x, seed=None, prngs_cuda=None):
         """
         Forward function.
         Any mask is is composed of two 2D plans:
@@ -327,6 +435,7 @@ class ResNet(nn.Module):
             2. The second plan represents the regions of interest (glands).
 
         :param x: tensor, input image with size (nb_batch, depth, h, w).
+        :param seed: int, seed for thread (to guarantee reproducibility over a fixed number of multigpus.)
         :return: (out_pos, out_neg, mask):
             x_pos: tensor, the image with the mask applied. size (nb_batch, depth, h, w)
             x_neg: tensor, the image with the complementary mask applied. size (nb_batch, depth, h, w)
@@ -354,7 +463,7 @@ class ResNet(nn.Module):
         # x_16 = F.dropout(x_16, p=0.3, training=self.training, inplace=False)
         x_32 = self.layer4(x_16)   # 1 / 32: [n, 512/2048/--, 15, 15]   --> x2^5 to get back to 1.
 
-        scores, maps = self.headseg(x_32)
+        scores, maps = self.headseg(x=x_32, seed=seed, prngs_cuda=prngs_cuda)
 
         # compute M+
         prob = F.softmax(scores, dim=1)
@@ -368,12 +477,20 @@ class ResNet(nn.Module):
 
         return mpos_inter, scores, maps
 
-    def classify(self, x):
+    def classify(self, x, seed=None, prngs_cuda=None):
         # Resize the image first.
         _, _, h, w = x.shape
         h_s, w_s = int(h * self.scale[0]), int(w * self.scale[1])
         # reshape
-        x = F.interpolate(input=x, size=(h_s, w_s), mode='bilinear', align_corners=ALIGN_CORNERS)
+
+        if seed is not None:
+            # Detaching is not important since we do not compute any gradient below this instruction.
+            # When using multigpu, detaching seems to help obtain reproducible results.
+            # It does not guarantee the reproducibility 100%.
+            x = F.interpolate(input=x, size=(h_s, w_s), mode='bilinear', align_corners=ALIGN_CORNERS).detach()
+        else:
+            # It is ok to use this for one single gpu. The code is 100% reproducible.
+            x = F.interpolate(input=x, size=(h_s, w_s), mode='bilinear', align_corners=ALIGN_CORNERS)
 
         x = self.relu1(self.bn1(self.conv1(x)))  # 1 / 2: [n, 64, 240, 240]   --> x2^1 to get back to 1.
         x = self.relu2(self.bn2(self.conv2(x)))  # 1 / 2: [n, 64, 240, 240]   --> x2^1 to get back to 1.
@@ -385,7 +502,7 @@ class ResNet(nn.Module):
         x_32 = self.layer4(x_16)  # 1 / 32: [n, 512/2048/--, 15, 15]   --> x2^5 to get back to 1.
 
         # classifier at 32.
-        scores32, maps32 = self.cl32(x_32)
+        scores32, maps32 = self.cl32(x=x_32, seed=seed, prngs_cuda=prngs_cuda)
 
         # Final
         scores, maps = scores32, maps32

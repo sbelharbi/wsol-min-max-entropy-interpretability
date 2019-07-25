@@ -153,12 +153,19 @@ class TotalLossEval(TotalLoss):
         :param netoutput: out_pos, out_neg, masks.
         :param labels: tensor of the image labels.
         :param masks_t: list of tensors containing the true masks.
-        :return: total_loss, loss_pos, loss_neg, dice_ind, loss_class_seg.
+        :return: total_loss, loss_pos, loss_neg, f1pos, f1neg, loss_class_seg.
         """
         # Compute Dice index, and get the adjusted predicted mask (cropped if necessary. We do not use the padded
         # mask from the net output.).
         out_pos, out_neg, masks, scores_seg, _ = netoutput
-        dice_ind, masks = self.dice([masks], masks_t)
+        # We do not compute dice here since we need to do some  upsacling operations over it depending on the dataset.
+        #TODO: Remove entirely these lines, and make dice computation universel in a sens the two input have the same
+        # dimension and there is no need to do any cropping or other operations.
+
+        # Compute F1 (dice index) over positive regions.
+        # f1pos, masks = self.dice([masks], masks_t)
+        # Compute F1 over the negative regions.
+        # f1neg, mask = self.dice([1. - masks], [1. - m for m in masks_t])
 
         # Compute loss pos, neg areas.
         loss_pos, loss_neg = self.shared_losses(netoutput, labels)
@@ -167,7 +174,7 @@ class TotalLossEval(TotalLoss):
         # Total loss
         total_loss = loss_class_seg + loss_pos + loss_neg
 
-        return total_loss, loss_pos, loss_neg, dice_ind, loss_class_seg
+        return total_loss, loss_pos, loss_neg, loss_class_seg
 
 
 # ====================== TEST =========================================

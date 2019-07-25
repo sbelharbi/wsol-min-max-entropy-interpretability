@@ -1,5 +1,16 @@
+import threading
+
+
+import numpy as np
+
+
 import torch
 import torch.nn as nn
+
+thread_lock = threading.Lock()  # lock for threads to protect the instruction that cause randomness and# make them
+# thread-safe.
+
+import reproducibility
 
 
 __all__ = ["WildCatPoolDecision", "ClassWisePooling"]
@@ -46,12 +57,13 @@ class WildCatPoolDecision(nn.Module):
         else:
             return int(k)
 
-    def forward(self, x):
+    def forward(self, x, seed=None, prngs_cuda=None):
         """
         Input:
             In the case of K classes:
                 x: torch tensor of size (n, c, h, w), where n is the batch size, c is the number of classes,
                 h is the height of the feature map, w is its width.
+            seed: int, seed for the thread to guarantee reproducibility over a fixed number of gpus.
         Output:
             scores: torch vector of size (k). Contains the wildcat score of each class. A score is a linear combination
             of different features. The class with the highest features is the winner.
@@ -67,7 +79,20 @@ class WildCatPoolDecision(nn.Module):
 
         # dropout
         if self.dropout != 0.:
-            sorted_features = self.dropout_md(sorted_features)
+            if seed is not None:
+                thread_lock.acquire()
+                assert prngs_cuda is not None, "`prngs_cuda` is expected to not be None. Exiting .... [NOT OK]"
+                prng_state = (torch.cuda.get_rng_state().cpu())
+                reproducibility.force_seed(seed)
+                torch.cuda.set_rng_state(prngs_cuda.cpu())
+
+                sorted_features = self.dropout_md(sorted_features)  # instruction that causes randomness.
+
+                reproducibility.force_seed(seed)
+                torch.cuda.set_rng_state(prng_state)
+                thread_lock.release()
+            else:
+                sorted_features = self.dropout_md(sorted_features)
 
         scores = sorted_features.narrow(-1, 0, kmax).sum(-1).div_(kmax)
 
@@ -110,9 +135,10 @@ class ClassWisePooling(nn.Module):
 
 if __name__ == "__main__":
     b, c = 10, 2
+    reproducibility.force_seed(0)
     funcs = [WildCatPoolDecision(dropout=0.5)]
     x = torch.randn(b, c, 12, 12)
     for func in funcs:
         out = func(x)
-        print(func.__class__.__name__, '->', out.size())
+        print(func.__class__.__name__, '->', out.size(), out)
 

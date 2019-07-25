@@ -1,10 +1,14 @@
-import torch
-import numpy as np
 import random
 import os
 import warnings
-from tools import announce_msg
 
+
+import numpy as np
+import torch
+from torch._C import default_generator
+
+
+from tools import announce_msg
 
 DEFAULT_SEED = 0
 
@@ -65,7 +69,7 @@ def set_seed(seed=None):
 def force_seed(seed):
     """
     For seed to some modules.
-    :param seed:
+    :param seed: int. The current seend.
     :return:
     """
     torch.manual_seed(seed)
@@ -76,4 +80,37 @@ def force_seed(seed):
     torch.backends.cudnn.benchmark = False
     torch.backends.cudnn.deterministic = True  # Deterministic mode can have a performance impact, depending on your
     # model: https://pytorch.org/docs/stable/notes/randomness.html#cudnn
+    # If multigpu is on, deactivate cudnn since it has many randmon things that we can not control.
+    if torch.cuda.device_count() > 1 and os.environ["ALLOW_MULTIGPUS"] == 'True':
+        torch.backends.cudnn.enabled = False
 
+
+def manual_seed(seed):
+    r"""Sets the seed for generating random numbers. Returns a
+    `torch._C.Generator` object.
+
+    NOTE: WE REMOVE MANUAL RESEEDING ALL THE GPUS. At this point, it is not necessary; and there is not logic/reason
+    to do it since we want only to reseed the current device.
+
+    Args:
+        seed (int): The desired seed.
+    """
+    return default_generator.manual_seed(int(seed))
+
+
+def force_seed_thread(seed):
+    """
+    For seed to some modules.
+    :param seed:
+    :return:
+    """
+    manual_seed(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.backends.cudnn.enabled = False
+    # torch.backends.cudnn.enabled = True
+    # torch.backends.cudnn.enabled = False
+    # torch.backends.cudnn.benchmark = False
+    # torch.backends.cudnn.deterministic = True  # Deterministic mode can have a performance impact, depending on your
+    # model: https://pytorch.org/docs/stable/notes/randomness.html#cudnn

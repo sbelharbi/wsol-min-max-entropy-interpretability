@@ -21,14 +21,14 @@ model:
   kmin: 0.09
   modalities: 5
   name: resnet101
-  num_classes: 5
+  num_classes: 200
   num_masks: 1
   pretrained: true
   scale: !!python/tuple [0.5, 0.5]
   sigma: 0.5
   w: 8
 name_classes: encoding.yaml
-nbr_classes: 5
+nbr_classes: 200
 nbr_times_erase: 0
 normalize: true
 num_workers: 8
@@ -43,7 +43,7 @@ optimizer:
 pad_eval: false
 padding_mode: reflect
 padding_size: null
-path_pre_trained: ../our-pretrained/cub5-0.pt
+path_pre_trained: ../our-pretrained/cub-0.pt
 preload: true
 rangeh: !!python/tuple [0, 1]
 resize: null

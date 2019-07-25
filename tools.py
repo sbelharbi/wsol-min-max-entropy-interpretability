@@ -24,15 +24,16 @@ import pickle as pkl
 import fnmatch
 import ctypes
 from multiprocessing import Process, Lock
-
+from io import BytesIO
+import zipfile
+from collections import OrderedDict
 
 import torch
 
 from sklearn.metrics import confusion_matrix, roc_curve, precision_recall_curve, auc, f1_score
 from torchvision import transforms
 from scipy import interp
-import torchvision.transforms.functional as TF
-import torch.nn.functional as F
+import pydensecrf.densecrf as dcrf
 
 
 class Dict2Obj(object):
@@ -85,6 +86,92 @@ class AverageMeter(object):
             return self.latest_avg
 
 
+class CRF(object):
+    """
+    CRF class to perform post-processing when called.
+    """
+    def __init__(self, nbr_classes, n_iter=5, sxyg=(3, 3), sxyb=(80, 80), srgbb=(13, 13, 13)):
+        """
+        Init. function.
+        :param nbr_classes: int, the total number of classes.
+        :param n_iter: int, the number of iterations for inference.
+        :param sxyg: tuple of int coefficients (sx, sy) of the Gaussian filter.
+        :param sxyb: tuple of int coefficients (sx, sy) of the bilateral filter.
+        :param srgbb: tuple of the coefficients (sr, sg, sb) of the bilateral filter.
+        """
+        self.nbr_classes = nbr_classes
+        self.n_iter = n_iter
+        self.sxyg = sxyg
+        self.sxyb = sxyb
+        self.srgbb = srgbb
+
+    def __call__(self, img, softmx):
+        """
+        Post-process the 2d softmax output maps.
+        :param img: numpy.ndarray of shape (h, w, depth) of type unint8. The input image.
+        :param softmx: numpy.ndarray of shape (c, h, w) of float32. Contains the probbaility maps for each class of
+        the `c` classes.
+        :return: smooth_prob: numpy.ndarray, matrix of post-processed probabilities of size (c, h, w) of float32
+        where the sum over `c` axis is 1. (probability)
+        """
+        # img
+        assert isinstance(img, np.ndarray), 'img must be instance of numpy.ndarray. You provided {} .... [NOT ' \
+                                            'OK]'.format(type(img))
+        assert img.dtype == np.uint8, 'img dtype must be numpy.uint8. You provided {} .... [NOT OK]'.format(img.dtype)
+        assert img.ndim == 3, 'img must be RGB: 3 dims: : (h, w, 3). You provided {} .... [NOT OK]'.format(img.ndim)
+        assert img.shape[2] == 3, 'the last dim of img must be 3: (h, w, 3). You provided {} .... [NOT OK]'.format(
+            img.shape[2]
+        )
+
+        # softmx
+        assert isinstance(softmx, np.ndarray), 'softmx must be instance of numpy.ndarray. You provided {} .... [NOT ' \
+                                               'OK]'.format(type(softmx))
+        assert softmx.dtype == np.float32, 'softmx dtype must be numpy.float32. You provided {} .... [NOT OK]'.format(
+            softmx.dtype)
+        assert softmx.ndim == 3, 'softmx must have 3 dims: (c, h, w). You provided {} .... [NOT OK]'.format(
+            softmx.ndim)
+        assert softmx.shape[0] == self.nbr_classes, 'The first dim of softmx must be {}: ({}, w). You provided {} ' \
+                                                    '.... [NOT OK]'.format(self.nbr_classes, self.nbr_classes,
+                                                                           softmx.shape[0])
+        assert (softmx >= 0).all(), 'softmx must be >=0. .... [NOT OK]'
+        assert (softmx.sum(axis=0).squeeze() == np.ones_like(softmx.sum(axis=0).squeeze())).all(), 'softmx must ' \
+                                                                                                   'probabilities....' \
+                                                                                                   '[NOT OK]'
+
+        # img, softmx
+        assert img.shape[0] == softmx.shape[1], 'img height {} must be the same as in the softmax {}. They are not ' \
+                                                'the same. .... [NOT OK]'.format(img.shape[0], softmx[1])
+        assert img.shape[1] == softmx.shape[2], 'img width {} must be the same as in the softmx {}. They are not the ' \
+                                                'same. .... [NOT OK]'.format(img.shape[1], softmx[2])
+
+        assert softmx.shape[0] == self.nbr_classes, 'softmx.shape[0] {} must be the same as self.nbr_classes {}. They' \
+                                                    'are different. .... [NOT OK]'.format(softmx.shape[0],
+                                                                                          self.nbr_classes)
+
+        h, w, _ = img.shape
+        d = dcrf.DenseCRF2D(w, h, self.nbr_classes)
+        softmx = softmx.reshape((self.nbr_classes, -1))
+        U = -np.log(softmx)
+
+        # Add unary potentials
+        d.setUnaryEnergy(U)
+
+        # Add pairwise potentials
+        # # Adds the locations feature only (color-independent).
+        d.addPairwiseGaussian(sxy=self.sxyg, compat=3, kernel=dcrf.DIAG_KERNEL, normalization=dcrf.NORMALIZE_SYMMETRIC)
+
+        # # Add  location and color features: (x,y,r,g,b).
+        d.addPairwiseBilateral(sxy=self.sxyb, srgb=self.srgbb, rgbim=img, compat=10, kernel=dcrf.DIAG_KERNEL,
+                               normalization=dcrf.NORMALIZE_SYMMETRIC)
+
+        # Inference
+        Q = d.inference(self.n_iter)
+        smooth_prob = np.array(Q)  # shape (nbr_classes, h * w)
+        smooth_prob = smooth_prob.reshape((self.nbr_classes, h, w)).astype(np.float32)
+
+        return smooth_prob
+
+
 def count_nb_params(model):
     """
     Count the number of parameters within a model.
@@ -124,7 +211,7 @@ class VisualiseMIL(object):
         self.prec = "%." + str(floating) + "f"
         self.height_tag = height_tag
         self.height_tag_paper = height_tag_paper  # for the paper.
-        self.y = int(self.height_tag / 3)  # y position of the text inside the tag. (first line)
+        self.y = int(self.height_tag / 4)  # y position of the text inside the tag. (first line)
         self.y2 = self.y * 2  # y position of the text inside the tag. (second line)
         self.y3 = self.y * 3  # y position of the text inside the tag. (3rd line)
         self.dx = 10  # how much space to put between LABELS (not word) inside the tag.
@@ -228,20 +315,16 @@ class VisualiseMIL(object):
         draw = ImageDraw.Draw(img_tag)
 
         x = self.left_margin
-
-        if name == "":
-            draw, x = self.drawonit(draw, x, self.y, "Input:", self.white, self.font_regular, self.dx)
-        else:
-            msg = "Input ({}):".format(name)
-            draw, x = self.drawonit(draw, x, self.y, msg, self.white, self.font_regular, self.dx)
-
+        draw, x = self.drawonit(draw, x, self.y, "In.cl.:", self.white, self.font_regular, self.dx)
         draw, x = self.drawonit(draw, x, self.y, label, self.white, self.font_bold, self.dx)
+
+        x = self.left_margin
         msg = "(h){}pix.x(w){}pix.".format(him, wim)
-        self.drawonit(draw, x, self.y, msg, self.white, self.font_bold, self.dx)
+        self.drawonit(draw, x, self.y2, msg, self.white, self.font_bold, self.dx)
 
         return img_tag
 
-    def create_tag_pred_mask(self, wim, label, probability, status, dice):
+    def create_tag_pred_mask(self, wim, label, probability, status, f1pos, f1neg):
         """
         Create a PIL.Image.Image of RGB uint8 type. Then, writes a message over it.
 
@@ -261,15 +344,13 @@ class VisualiseMIL(object):
         draw = ImageDraw.Draw(img_tag)
         x = self.left_margin
 
-        draw, x = self.drawonit(draw, x, self.y, "Pred.class:", self.white, self.font_regular, self.dx)
+        draw, x = self.drawonit(draw, x, self.y, "Pred.cl.:", self.white, self.font_regular, self.dx)
         draw, x = self.drawonit(draw, x, self.y, label, self.white, self.font_bold, self.dx)
 
         # Jump to the second line (helpful when the name of the class is long).
         x = self.left_margin
         draw, x = self.drawonit(draw, x, self.y2, "Prob.: {}%".format(str(self.prec % (probability * 100))),
-                                self.white, self.font_bold, self.dx)
-        dice = "None" if status is None else str(self.prec % (dice * 100)) + "%"
-        draw, x = self.drawonit(draw, x, self.y2, "Dice ind.: {}".format(dice), self.white, self.font_bold, self.dx)
+                                self.white, self.font_regular, self.dx)
 
         if status == "correct":
             color = self.green
@@ -281,9 +362,15 @@ class VisualiseMIL(object):
         else:
             raise ValueError("Unsupported status `{}` .... [NOT OK]".format(status))
 
-        draw, x = self.drawonit(draw, x, self.y2, "[", self.white, self.font_regular, 0)
+        draw, x = self.drawonit(draw, x, self.y2, "Status: [", self.white, self.font_regular, 0)
         draw, x = self.drawonit(draw, x, self.y2, "{}".format(status), color, self.font_bold, 0)
         self.drawonit(draw, x, self.y2, "]", self.white, self.font_regular, self.dx)
+
+        x = self.left_margin
+        f1posstr = "None" if status is None else str(self.prec % (f1pos * 100)) + "%"
+        f1negstr = "None" if status is None else str(self.prec % (f1neg * 100)) + "%"
+        draw, x = self.drawonit(draw, x, self.y3, "F1+: {}".format(f1posstr), self.white, self.font_regular, self.dx)
+        draw, x = self.drawonit(draw, x, self.y3, "F1-: {}".format(f1negstr), self.white, self.font_regular, self.dx)
 
         return img_tag
 
@@ -446,7 +533,7 @@ class VisualiseMIL(object):
 
         return img_out
 
-    def __call__(self, input_img, probab, pred_label, pred_mask, dice, name_classes, iter,
+    def __call__(self, input_img, probab, pred_label, pred_mask, f1pos, f1neg, name_classes, iter,
                  use_tags=True, label=None, mask=None, show_hists=True, bins=None, rangeh=None, name_file=""):
         """
         Visualise MIL prediction.
@@ -456,7 +543,8 @@ class VisualiseMIL(object):
         :param pred_label: int, the ID of the predicted class. We allow the user to provide the prediction.
         Generally, it can be inferred from the scores.
         :param pred_mask: numpy.ndarray, 2D float matrix of size (h, w). The predicted mask.
-        :param dice: float [0, 1]. Dice index.
+        :param f1pos: float [0, 1]. Dice index over the positive regions.
+        :param f1neg: float [0, 1]. Dice index over the negative regions.
         :param name_classes: dict, {"class_name": int}.
         :param iter: str, indicates the iteration when this call happens. "Final" to indicate this is the final
         prediction.
@@ -513,7 +601,7 @@ class VisualiseMIL(object):
                 status = "correct" if label == pred_label else "wrong"
             else:
                 status = "unknown"
-            pred_mask_tag = self.create_tag_pred_mask(wim, class_name, probab, status, dice)
+            pred_mask_tag = self.create_tag_pred_mask(wim, class_name, probab, status, f1pos, f1neg)
             heat_pred_mask_tag = self.create_tag_heatmap_pred_mask(wim, iter)
 
         # creates histograms
@@ -689,10 +777,9 @@ class VisualizePaper(VisualiseMIL):
                 list_imgs.append(self.convert_mask_into_heatmap(img, per_method[k]["binary_mask"], binarize=False))
 
         nbr_imgs = len(methods.keys()) + 2
-        font_paper = self.font_bold_paper
+        font = self.font_bold_paper
         if use_small_font_paper:
             font = self.font_bold_paper_small
-
 
         tag_paper_img = Image.new("RGB", (wim * nbr_imgs + self.space * (nbr_imgs - 1), self.height_tag_paper))
         list_tags_paper = [self.create_tag_paper(wim, "Input", font), self.create_tag_paper(wim, "True mask", font)]
@@ -796,6 +883,14 @@ def get_exp_name(args):
     return name
 
 
+def get_cpu_device():
+    """
+    Return CPU device.
+    :return:
+    """
+    return torch.device("cpu")
+
+
 def get_device(args):
     """
     Returns the device on which the computations will be performed.
@@ -809,15 +904,106 @@ def get_device(args):
     warnings.warn("You are accessing an anonymized part of the code. We are going to exit. Come here and fix this "
                   "according to your setup. Setup CUDA or CPU.")
     sys.exit(0)
-    if username == "XXXXXXXXXXXXX":  # XXXXXXXXXXXXXX
+    if username == "XXXXXXXXXXXXX":  # XXXXXXXXXXXXX
         device = torch.device("cuda:" + args.cudaid if torch.cuda.is_available() else "cpu")
     else:
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
     if torch.cuda.is_available():
         torch.cuda.set_device(int(args.cudaid))
 
     return device
+
+
+def load_pre_pretrained_model(model, path_file, strict):
+    """
+    Load parameters in path_file into the model.
+    The mapping is done on CPU.
+    model needs to be on CPU. If it is on GPU, an error is raised. Deal with it on your own.
+    If Path_file indicates parameters that are on GPU, they are moved to CPU.
+
+    :param model: instance of torch.nn.Module
+    :param path_file: str, path to the file containing the parameters.
+    :param strict: Bool. If True, the loading must be strict.
+    :return: model, torch.nn.Module with the parameter loaded.
+    """
+    # check the target is is on CPU:
+    if next(model.parameters()).is_cuda:
+        raise ValueError("We expected the target model to be on CPU. You need to move to CPU then, load your "
+                         "parameters. Exiting .... [NOT OK]")
+    if not os.path.exists(path_file):
+        raise ValueError("File {} does not exist. Exiting .... [NOT OK]")
+
+    model.load_state_dict(torch.load(path_file, map_location=get_cpu_device()),
+                          strict=strict)
+    print("Parameters have been loaded successfully from {} .... [OK]".format(path_file))
+
+    return model
+
+
+def copy_model_params_from_gpu_to_cpu(model_src, model_trg):
+    """
+    Copies the parameters of the model on GPU to the parameters of the model on CPU.
+    :param model_src: model on GPU.
+    :param model_trg: model on CPU.
+    :return:
+    """
+    state_dict_src = model_src.state_dict()
+    state_dict_trg = model_trg.state_dict()
+
+    for k in state_dict_src.keys():
+        state_dict_trg[k] = copy.deepcopy(state_dict_src[k].cpu())  # Expensive operation (move from GPU to CPU).
+
+    model_trg.load_state_dict(state_dict_trg)
+
+    return model_trg
+
+
+def copy_model_state_dict_from_gpu_to_cpu(model_src_gpu):
+    """
+    Copies the state dict of the model on GPU to CPU.
+    :param model_src_gpu: model on GPU.
+    :return: new_state_dict: the model_src_gpu state dict in CPU.
+    """
+    state_dict_gpu = model_src_gpu.state_dict()
+    new_state_dict = OrderedDict()
+
+    for ks, vs in state_dict_gpu.items():
+        # Example of name of parameters when using multi-gpus: module.layer4.2.bn3.weight
+        # For the same parameter on a single gpu: layer4.2.bn3.weight
+        if "module." in ks:
+            assert os.environ["ALLOW_MULTIGPUS"] == "True", "The word 'module' is expected in the sub-modules name " \
+                                                            "only when using multigpu. We found the word 'module' but" \
+                                                            "it does not seem that we are in a a multigpu mode. " \
+                                                            "Exiting .... [NOT OK]"
+            ks = ks.replace("module.", "")
+        new_state_dict[ks] = copy.deepcopy(vs.cpu())  # # to be safe, we use deepcopy.
+        # Expensive operation (move from GPU to CPU).
+
+    return new_state_dict
+
+
+def get_state_dict(model):
+    """
+    Get a COPY of  the state dict of a model.
+    :param model: a model.
+    :return:new_state_dict: the state of the model. It is on the same device as the model.
+    """
+    state_dict_gpu = model.state_dict()
+    new_state_dict = OrderedDict()
+
+    for ks, vs in state_dict_gpu.items():
+        # Example of name of parameters when using multi-gpus: module.layer4.2.bn3.weight
+        # For the same parameter on a single gpu: layer4.2.bn3.weight
+        if "module." in ks:
+            assert os.environ["ALLOW_MULTIGPUS"] == "True", "The word 'module' is expected in the sub-modules name " \
+                                                            "only when using multigpu. We found the word 'module' but" \
+                                                            "it does not seem that we are in a a multigpu mode. " \
+                                                            "Exiting .... [NOT OK]"
+            ks = ks.replace("module.", "")
+        new_state_dict[ks] = copy.deepcopy(vs)  # to be safe, we use deepcopy
+
+    return new_state_dict
 
 
 def get_rootpath_2_dataset(args):
@@ -829,7 +1015,8 @@ def get_rootpath_2_dataset(args):
     datasetname = args.dataset
     username = getpass.getuser()
     warnings.warn("You are accessing an anonymized part of the code. We are going to exit. Come here and fix this "
-                  "according to your setup. Setup the absolute path to the parent where all the datasets are located. All the dataset are expected to be located in one folder. We are asking to provide the absolute path to this folder.")
+                  "according to your setup. Setup the absolute path to the parent where all the datasets are located. All the dataset are expected to "
+                  "be located in one folder. We are asking to provide the absolute path to this folder.")
     sys.exit(0)
     baseurl= None
     if username == 'XXXXXXXXXXXXX':
@@ -982,7 +1169,7 @@ def final_processing(model, dataloader, dataset, dataset_name, test_fn, criterio
     visualiser = VisualiseMIL(alpha=args.alpha, floating=args.floating, height_tag=args.height_tag, bins=args.bins,
                               rangeh=args.rangeh)
 
-    def draw_regions(datasetx, namex, masksx, predictionsx, probsx, dicex):
+    def draw_regions(datasetx, namex, masksx, predictionsx, probsx, f1posx, f1negx):
         """
         Plot the regions of interest.
         :param datasetx: instance of loader.PhotoDataset.
@@ -990,7 +1177,8 @@ def final_processing(model, dataloader, dataset, dataset_name, test_fn, criterio
         :param masksx: np.ndarray 2D float32 matrix of size (h, w). Mask of the positive region.
         :param predictionsx: np.ndarray, numpy vector of numpy.int64 of predictions. ID of the predicted labels.
         :param probsx: np.ndarray, probability of the predicted classes.
-        :param dicex: np.ndarray, dice of each image.
+        :param f1posx: np.ndarray, dice of each image over positive regions.
+        :param f1negx: np.ndarray, dice of each image over negative regions.
         :return:
         """
         n = len(datasetx)
@@ -1007,6 +1195,7 @@ def final_processing(model, dataloader, dataset, dataset_name, test_fn, criterio
         save_pred["labels"] = []  # contains the true labels (int) to compute the classification error.
 
         save_pred["pred_masks"] = []  # predicted binary mask (to compute dice index: F1+, F1-).
+        save_pred["pred_masks_c"] = []  # predicted continuous mask to be used for CRF post-processing.
         save_pred["pred_labels"] = []  # contains the image label predictions (int). Useful for printing the predicted
         # class.
         save_pred["pred_prob"] = []  # for our method: it contains the prob. of the predicted class. For the
@@ -1017,8 +1206,9 @@ def final_processing(model, dataloader, dataset, dataset_name, test_fn, criterio
         save_pred["dataset"] = args.dataset  # name of the dataset. Useful to get the full path of the files.
 
         true_labels = []
-        metrics_ = dict()
+        # metrics_ = dict()
         rootpath = get_rootpath_2_dataset(args)
+        zipout = zipfile.ZipFile(join(OUTD, namex.lower(), "prediction.zip"), "w")
 
         for i in tqdm.tqdm(range(n), ncols=80, total=n):
             img = datasetx.get_original_input_img(i)  # PIL.Image.Image uint8 RGB image.
@@ -1029,25 +1219,36 @@ def final_processing(model, dataloader, dataset, dataset_name, test_fn, criterio
             mask = copy.deepcopy(masksx[i])
             prediction = int(predictionsx[i])
             prob = probsx[i]
-            dice = dicex[i]
+            f1posi = f1posx[i]
+            f1negi = f1negx[i]
             # Speed up saving. Del. later.
-            if i < 200:
-                img_visu = visualiser(
-                    img, prob, prediction, mask, dice, args.name_classes, "Final",
-                    use_tags=args.use_tags, label=label, mask=true_mask, show_hists=args.show_hists, bins=args.bins,
-                    rangeh=args.rangeh
-                )
-                name_file = datasetx.absolute_paths_imgs[i].split(os.sep)[-1].split(".")[0]  # e.g. 'train_13'
-                img_visu.save(join(outd_data, name_file + "." + args.extension[0]), args.extension[1])
+            # if i < 200:
+            img_visu = visualiser(
+                img, prob, prediction, mask, f1posi, f1negi, args.name_classes, "Final",
+                use_tags=args.use_tags, label=label, mask=true_mask, show_hists=args.show_hists, bins=args.bins,
+                rangeh=args.rangeh
+            )
+            name_file = datasetx.absolute_paths_imgs[i].split(os.sep)[-1].split(".")[0]  # e.g. 'train_13'
+            # We use zip files to avoid overloading the disc with files. It is SLIGHTLY faster than writing files
+            # in disc (mainly/probably due to compression).
+            # Write in file-in-memory
+            fobj = BytesIO()  # this is a file object
+            img_visu.save(fobj, format=args.extension[1])  # save in file object in memory.
+            # compress it in memory in the zip file.
+            zipout.writestr(name_file + "." + args.extension[0], fobj.getvalue())
+            # run `unzip -o prediction.zip -d prediction` to decompress the file.
 
-            # Compute metrics sample per sample!!!
-            tmp = compute_metrics(true_labels=[label], pred_labels=[prediction], true_masks=[true_mask],
-                                  pred_masks=[mask], binarize=True, ignore_roc_pr=True, average=False)
-            for key in tmp.keys():
-                if key in metrics_.keys():
-                    metrics_[key] += tmp[key]
-                else:
-                    metrics_[key] = tmp[key]
+            # Expensive operation: DISC I/O.
+            # img_visu.save(join(outd_data, name_file + "." + args.extension[0]), args.extension[1], optimize=True)
+
+            # # Compute metrics sample per sample!!!
+            # tmp = compute_metrics(true_labels=[label], pred_labels=[prediction], true_masks=[true_mask],
+            #                       pred_masks=[mask], binarize=True, ignore_roc_pr=True, average=False)
+            # for key in tmp.keys():
+            #     if key in metrics_.keys():
+            #         metrics_[key] += tmp[key]
+            #     else:
+            #         metrics_[key] = tmp[key]
 
             # Things to save for later: relative path to the image, mask, and label.
             # Predicted binary mask,
@@ -1058,12 +1259,15 @@ def final_processing(model, dataloader, dataset, dataset_name, test_fn, criterio
             save_pred["labels"].append(label)
 
             save_pred["pred_masks"].append(mask >= 0.5)  # binary to save RAM space.
+            save_pred["pred_masks_c"].append(mask)  # continuous mask. Needed for CRF post-processing.
             save_pred["pred_labels"].append(prediction)
             save_pred["pred_prob"].append(prob)
 
         # Normalize the metrics.
-        for key in metrics_.keys():
-            metrics_[key] /= float(n)
+        # for key in metrics_.keys():
+        #     metrics_[key] /= float(n)
+
+        zipout.close()
 
         if save_pred_for_later_comp:
             for_later = join(OUTD, namex.lower(), "stats_for_comp_{}.pkl".format(namex.lower()))
@@ -1071,8 +1275,6 @@ def final_processing(model, dataloader, dataset, dataset_name, test_fn, criterio
                 pkl.dump(save_pred, flater, protocol=pkl.HIGHEST_PROTOCOL)
 
         print("Done saving the prediction images for the {} dataset .... [OK]".format(namex))
-
-        return metrics_
 
     # for dataloader, ssample, name, dataset in zip(dataloaders, save_sample, names, datasets):
     log(log_file, "==============================================================================================: \n")
@@ -1088,7 +1290,8 @@ def final_processing(model, dataloader, dataset, dataset_name, test_fn, criterio
     loss_pos = stats_now["loss_pos"].mean()
     loss_neg = stats_now["loss_neg"].mean()
     loss_class_seg = stats_now["loss_class_seg"].mean()
-    loss_dice = stats_now["loss_dice"]
+    f1pos = stats_now["f1pos"]
+    f1neg = stats_now["f1neg"]
     errors = stats_now["errors"]
 
     predictions = np.array(pred["predictions"])
@@ -1096,7 +1299,7 @@ def final_processing(model, dataloader, dataset, dataset_name, test_fn, criterio
     probs = np.array(pred["probs"])
     masks = pred["masks"]
 
-    metrics = draw_regions(dataset, dataset_name, masks, predictions, probs, loss_dice)
+    draw_regions(dataset, dataset_name, masks, predictions, probs, f1pos, f1neg)
 
     # # Compute specificity
     # t0 = dt.datetime.now()
@@ -1151,34 +1354,26 @@ def final_processing(model, dataloader, dataset, dataset_name, test_fn, criterio
     log(log_file, "Image level: \n")
     log(log_file, "Classification error.: {} \n".format(errors))
     log(log_file, "Pixel level: \n")
-    log(log_file, "Loss Dice index (CPU): {} \n".format(metrics["dice_avg"]))
-    log(log_file, "Loss Dice index (GPU): {} \n".format(np.mean(loss_dice) * 100))
-    # There maybe a slight difference between the Dice index computed on GPU, vs., CPU due to: precision,
-    # and more importantly, the execution order of the products on GPU. The difference starts after the 7th decimal
-    # number.
-    # Example: Dice CPU 63.490055964592216, Dice GPU: 63.49005591538217.
-    # We consider the Dice index computed on CPU.
-    # https://discuss.pytorch.org/t/why-different-results-when-multiplying-in-cpu-than-in-gpu/1356/3
 
     # assert np.mean(loss_dice) * 100 == metrics["dice_avg"], "Something wrong with Dice metric! or NAH"
-    log(log_file, "ROC AUC.: {} \n".format(metrics["roc_auc_avg"]))
-    log(log_file, "Precision-recall AUC.: {} \n".format(metrics["p_r_auc_avg"]))
-    log(log_file, "Specificity: {} \n".format(metrics["specificity_avg"]))
-    log(log_file, "F1 score (foreground): {} \n".format(metrics["f1_score_forg_avg"]))
-    log(log_file, "F1 score (background): {} \n".format(metrics["f1_score_back_avg"]))
+    log(log_file, "ROC AUC.: {} \n".format(None))
+    log(log_file, "Precision-recall AUC.: {} \n".format(None))
+    log(log_file, "Specificity: {} \n".format(None))
+    log(log_file, "F1 score (foreground): {} \n".format(np.mean(f1pos) * 100.))
+    log(log_file, "F1 score (background): {} \n".format(np.mean(f1neg) * 100.))
 
     # dump the factors for later: average over splits/folds.
     with open(join(OUTD, dataset_name.lower(), "factors_{}_{}_FINAL.pkl".format(dataset_name, epoch)),
               "wb") as off:
         factors_dict = dict()
-        factors_dict["roc_auc"] = metrics["roc_auc_avg"]
-        factors_dict["p_r_auc"] = metrics["p_r_auc_avg"]
-        factors_dict["dice"] = metrics["dice_avg"]
+        factors_dict["roc_auc"] = 0.
+        factors_dict["p_r_auc"] = 0.
+        factors_dict["dice"] = np.mean(f1pos) * 100.
         factors_dict["classification_error"] = errors
         factors_dict["total_loss"] = total_loss
-        factors_dict["specificity"] = metrics["specificity_avg"]
-        factors_dict["f1_score_forg"] = metrics["f1_score_forg_avg"]
-        factors_dict["f1_score_back"] = metrics["f1_score_back_avg"]
+        factors_dict["specificity"] = None
+        factors_dict["f1_score_forg"] = np.mean(f1pos) * 100.
+        factors_dict["f1_score_back"] = np.mean(f1neg) * 100.
         pkl.dump(factors_dict, off, protocol=pkl.HIGHEST_PROTOCOL)
 
     # Not now: it takes space.
@@ -1216,6 +1411,15 @@ def get_yaml_args(input_args):
         args["cudaid"] = input_args.cudaid
         args["yaml"] = input_args.yaml
 
+        if args["show_hists"]:
+            warnings.warn("You asked to show hist. of mask prediction. We decided to turn it off to speed up.")
+            args["show_hists"] = False
+
+        if args["floating"] != 2:
+            warnings.warn("We set the floating point to 2 instead of {}. It takes too much horizontal space.".format(
+                args["floating"]))
+            args["floating"] = 2
+
         # Checking
         if args["dataset"] == "glas":
             # Not sure why I had two vars. with the same value. No time to fix this.
@@ -1226,15 +1430,22 @@ def get_yaml_args(input_args):
                                                       "double check. Exiting .... [NOT OK]".format(
                 args["model"]["num_classes"])
         elif args["dataset"] == "Caltech-UCSD-Birds-200-2011":
-            assert args["nbr_classes"] == 5, "Caltech-UCSD-Birds-200-2011 dataset is expected to have 200 classes. " \
-                                               "You provided {}. Please " \
-                                               "double check. Exiting .... [NOT OK]".format(args["nbr_classes"])
-            assert args["model"]["num_classes"] == 5, "Caltech-UCSD-Birds-200-2011 dataset is expected to have 2 " \
-                                                    "classes. " \
-                                                    "You provided {}. Please " \
-                                                    "double check. Exiting .... [NOT OK]".format(
+            assert args["nbr_classes"] in [200, 5], "Caltech-UCSD-Birds-200-2011 dataset is expected to have [200, " \
+                                                    "5] classes. You provided {}. Please " \
+                                                    "double check. Exiting .... [NOT OK]".format(args["nbr_classes"])
+            assert args["model"]["num_classes"] in [200, 5], "Caltech-UCSD-Birds-200-2011 dataset is expected to " \
+                                                             "have [200, 5] classes. You provided {}. Please " \
+                                                             "double check. Exiting .... [NOT OK]".format(
                 args["model"]["num_classes"])
 
+        # set the path to model parameters to load them.
+        parser.add_argument("--path_pre_trained", type=str, default=None,
+                            help="Absolute path to file containing parameters of a "
+                                 "model. Use --strict to specify if the  pre-trained "
+                                 "model needs to match exactly the current model or not.")
+        parser.add_argument("--strict", type=bool, default=None,
+                            help="If True, the pre-trained model needs to match exactly the current model. Default: "
+                                 "True.")
         # Allow the user to override some values in the yaml.
         # This helps changing the hyper-parameters using the command line without changing the yaml file (very
         # helpful during debug!!!!).
@@ -1280,6 +1491,17 @@ def get_yaml_args(input_args):
             :return:
             """
             print("{}: {}  -----> {}".format(name, vl_old, vl))
+
+        if input_parser.path_pre_trained is not None:
+            warnit("path_pre_trained", None, input_parser.path_pre_trained)
+            args["path_pre_trained"] = input_parser.path_pre_trained
+
+        if input_parser.strict is not None:
+            warnit("strict", None, input_parser.strict)
+        else:
+            input_parser.strict = True
+            warnit("strict", None, True)
+        args["strict"] = input_parser.strict
 
         # change the value of yaml variable IF it was required in the command line.
         if input_parser.bsize is not None:
@@ -1538,6 +1760,8 @@ def plot_curves(values_dict, path, title="", best_iter=-1, plot_avg=True, avg_pe
 
     nbr_curves = len(values_dict.keys())
     sz = max([values_dict[k].size for k in values_dict.keys()])
+    if sz == 0:  # nothing has been recorded yet.
+        return 0
 
     assert isinstance(best_iter, int), "'best_iter' must be an integer. You provided `{}` .... [NOT " \
                                        "OK]".format(type(best_iter))
@@ -2437,7 +2661,8 @@ def init_stats(train=False):
 
     # Keys that are used only for evaluation.
     if not train:
-        out["loss_dice"] = np.array([])  # used only in EVALUATION over whole image.
+        out["f1pos"] = np.array([])  # used only in EVALUATION over whole image.
+        out["f1neg"] = np.array([])  # used only in EVALUATION over whole image.
 
     return out
 
@@ -2465,6 +2690,29 @@ def create_folders_for_exp(exp_folder, name):
             os.makedirs(l_dirs[k])
 
     return Dict2Obj(l_dirs)
+
+
+def check_if_allow_multgpu_mode():
+    """
+    Check if we can do multigpu.
+    If yes, allow multigpu.
+    :return: ALLOW_MULTIGPUS: bool. If True, we enter multigpu mode: 1. Computation will be dispatched over the
+    AVAILABLE GPUs. 2. Synch-BN is activated.
+    """
+    warnings.warn("You are accessing an anonymized part of the code. We are going to exit. Come here and fix this "
+                  "according to your setup. Set the default of MULTIGPU.")
+    sys.exit(0)
+
+    ALLOW_MULTIGPUS = True  # Allowed by default.
+
+    # ALLOW_MULTIGPUS = True
+    os.environ["ALLOW_MULTIGPUS"] = str(ALLOW_MULTIGPUS)
+    NBRGPUS = torch.cuda.device_count()
+    ALLOW_MULTIGPUS = ALLOW_MULTIGPUS and (NBRGPUS > 1)
+
+    return ALLOW_MULTIGPUS
+
+
 
 # ===========================================================================================================
 #                                            TEST
@@ -2665,6 +2913,29 @@ def test_compute_metrics_multi_processing():
             print("{}: {}".format(k, metrics[k]))
 
 
+def test_CRF():
+    from PIL import Image
+    from scipy.special import softmax
+    crf = CRF(2)
+    img = Image.open('data/debug/input/testA_1.bmp').convert('RGB')
+    print(img.size)
+    img = np.array(img)
+    print(img.shape, img.dtype)
+    h, w, _ = img.shape
+
+    sfmx = np.random.rand(2, h, w)
+    sfmx = softmax(sfmx, axis=0).astype(np.float32)
+    res = sfmx[0, :, :] * 255 / sfmx.max()
+    plt.imshow(res)
+    plt.show()
+
+    sfmx_ = crf(img, sfmx)
+
+    res = sfmx_[0, :, :] * 255 / sfmx_.max()
+    plt.imshow(res)
+    plt.show()
+
+
 if __name__ == "__main__":
 
     # test_plot_curve()
@@ -2687,6 +2958,8 @@ if __name__ == "__main__":
 
     # test_perform_summarization()
 
-    test_compute_metrics_multi_processing()
+    # test_compute_metrics_multi_processing()
+
+    test_CRF()
 
 
