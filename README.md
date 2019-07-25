@@ -29,7 +29,7 @@ We use this version to make multigpu case reproducible (best).
 
 # MultiGPU support and reproducibility (100% reproducibility not guaranteed. Sometimes the results are different, but most of the time the results are constant):
 * The code supports MultGPUs.
-* Despite our effort for make the code reproducible in the case og multigpu, we achieve reproducibility but, 
+* Despite our effort to make the code reproducible in the case of multigpu, we achieve reproducibility but, 
 sometimes it breaks. See [this](https://discuss.pytorch.org/t/reproducibility-over-multigpus-is-impossible-until-randomness-of-threads-is-controled-and-yet/47079?u=sbelharbi).
 
 
