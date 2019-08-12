@@ -8,18 +8,18 @@
 # Birds localization (Bird's head sniper):
 ##  Caltech-UCSD Birds-200-2011 (CUB5) prediction test samples:
 ### Gray_Catbird:
-![glas-benign](doc/cub5-Gray_Catbird.png)
+![CUB5 Gray_Catbird](doc/cub5-Gray_Catbird.png)
 ### Myrtle_Warbler:
-![glas-benign](doc/cub5-Myrtle_Warbler.png)
+![CUB5 Myrtle_Warbler](doc/cub5-Myrtle_Warbler.png)
 ### Ovenbird:
-![glas-benign](doc/cub5-Ovenbird.png)
+![CUB5 Ovenbird](doc/cub5-Ovenbird.png)
 ### Swainson_Warbler:
-![glas-benign](doc/cub5-Swainson_Warbler.png)
+![CUB5 Swainson_Warbler](doc/cub5-Swainson_Warbler.png)
 ### White_necked_Raven:
-![glas-benign](doc/cub5-White_necked_Raven.png)
+![CUB5 White_necked_Raven](doc/cub5-White_necked_Raven.png)
 
 ##  Caltech-UCSD Birds-200-2011 (CUB) prediction test samples:
-![glas-benign](doc/cub.png)
+![CUB](doc/cub.png)
 
 # Oxford flower 102 (OxF) prediction test samples:
-![glas-benign](doc/oxf.png)
+![Oxf](doc/oxf.png)
