@@ -1,4 +1,4 @@
-# Pytorch nightly build 1.2.0.dev20190616 code for: Weakly Supervised Object Localization using Min-Max Entropy: an Interpretable Framework
+# Pytorch code for: Weakly Supervised Object Localization using Min-Max Entropy: an Interpretable Framework
 
 # arXiv: [https://arxiv.org/abs/1907.12934](https://arxiv.org/abs/1907.12934)
 
