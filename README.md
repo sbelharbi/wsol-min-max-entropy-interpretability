@@ -2,6 +2,17 @@
 
 # arXiv: [https://arxiv.org/abs/1907.12934](https://arxiv.org/abs/1907.12934)
 
+## If you use this code, please cite our work:
+```
+@article{belharbi2019weakly,
+  title={Weakly Supervised Object Localization using Min-Max Entropy: an Interpretable Framework},
+  author={Belharbi, S. and Rony, J. and Dolz, J. and Ayed, I. and McCaffrey, L. and Granger, E.},
+  journal={coRR},
+  volume={abs/1907.12934},
+  year={2019}
+}
+```
+
 # Reproducibility (Single GPU: 100% reproducible):
 
 We took a particular care to the reproducibility of the code.
