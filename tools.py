@@ -878,8 +878,8 @@ def get_exp_name(args):
     time.sleep(np.random.randint(1, 5))  # in case many exps start in the same time, ..., wait a little bit.
     # TODO: create this function: add other info in the name of the experience.
     time_exp = dt.datetime.now().strftime('%m_%d_%Y_%H_%M_%S_%f')
-    name = "b-sz-{}-{}-{}-fold-{}".format(
-        args.batch_size, args.model["name"], time_exp, args.fold)
+    name = "b-sz-{}-{}-{}-fold-{}-ds-{}".format(
+        args.batch_size, args.model["name"], time_exp, args.fold, args.dataset)
     return name
 
 
@@ -904,7 +904,7 @@ def get_device(args):
     warnings.warn("You are accessing an anonymized part of the code. We are going to exit. Come here and fix this "
                   "according to your setup. Setup CUDA or CPU.")
     sys.exit(0)
-    if username == "XXXXXXXXXXXXX":  # XXXXXXXXXXXXX
+    if username == "XXXXXXXXXXXXX":
         device = torch.device("cuda:" + args.cudaid if torch.cuda.is_available() else "cpu")
     else:
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -1026,12 +1026,18 @@ def get_rootpath_2_dataset(args):
     elif username == "XXXXXXXXXXXXXX":  # XXXXXXXXXXXXX
         baseurl = "/XXXXXXXXXXXXXX/XXXXXXXXXXXXX/XXXXXXXXXXXXX/XXXXXXXXXXXXXXXX/datasets"
 
+    if baseurl is None:
+        raise ValueError("Sorry, it seems we are enable to recognize you. You seem to be new to this code. So, "
+                         "we recommend you add your baseurl on your own.")
+
     if datasetname == "bc18bch":
         baseurl = join(baseurl, "ICIAR-2018-BACH-Challenge")
     elif datasetname == "glas":
         baseurl = join(baseurl, "GlaS-2015/Warwick QU Dataset (Released 2016_07_08)")
     elif datasetname == "Caltech-UCSD-Birds-200-2011":
         baseurl = join(baseurl, "Caltech-UCSD-Birds-200-2011")
+    elif datasetname == 'Oxford-flowers-102':
+        baseurl = join(baseurl, 'Oxford-flowers-102')
 
     if baseurl is None:
         raise ValueError("Sorry, it seems we are enable to recognize you. You seem to be new to this code. So, "
@@ -1437,6 +1443,9 @@ def get_yaml_args(input_args):
                                                              "have [200, 5] classes. You provided {}. Please " \
                                                              "double check. Exiting .... [NOT OK]".format(
                 args["model"]["num_classes"])
+        elif args['dataset'] == 'Oxford-flowers-102':
+            assert args["nbr_classes"] == 102, 'Oxford-flowers-102 dataset is expected to have 102 classes; found' \
+                                               '{}. Exiting .... [NOT OK]'.format(args['nbr_classes'])
 
         # set the path to model parameters to load them.
         parser.add_argument("--path_pre_trained", type=str, default=None,
@@ -1608,6 +1617,11 @@ def get_train_transforms_img(args):
             # transforms.ColorJitter(0.4, 0.4, 0.4, 0.00),
             transforms.RandomHorizontalFlip()
         ])
+    elif args.dataset == 'Oxford-flowers-102':
+        return transforms.Compose([
+            # transforms.ColorJitter(0.4, 0.4, 0.4, 0.00),
+            transforms.RandomHorizontalFlip()
+        ])
     else:
         raise ValueError("Dataset {} unsupported. Exiting .... [NOT OK]".format(args.dataset))
 
@@ -1631,6 +1645,12 @@ def get_transforms_tensor(args):
         # [102.9801 / 255., 115.9465 / 255., 122.7717 / 255.],
         #                                  [1., 1., 1.]
 
+        return transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize([0.5, 0.5, 0.5],
+                                 [0.5, 0.5, 0.5])
+        ])
+    elif args.dataset == 'Oxford-flowers-102':
         return transforms.Compose([
             transforms.ToTensor(),
             transforms.Normalize([0.5, 0.5, 0.5],
@@ -2702,8 +2722,6 @@ def check_if_allow_multgpu_mode():
     warnings.warn("You are accessing an anonymized part of the code. We are going to exit. Come here and fix this "
                   "according to your setup. Set the default of MULTIGPU.")
     sys.exit(0)
-
-    ALLOW_MULTIGPUS = True  # Allowed by default.
 
     # ALLOW_MULTIGPUS = True
     os.environ["ALLOW_MULTIGPUS"] = str(ALLOW_MULTIGPUS)

@@ -9,12 +9,13 @@ import yaml
 config = {
     # ######################### GENERAL STUFF ##############################
     "MYSEED": 0,  # Seed for reproducibility. [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, ...]
-    "dataset": "Caltech-UCSD-Birds-200-2011",  # name of the dataset: glas, Caltech-UCSD-Birds-200-2011
-    "img_extension": "bmp",  # extension of the images in the dataset.
+    "dataset": "Oxford-flowers-102",  # name of the dataset: glas, Caltech-UCSD-Birds-200-2011,
+    # Oxford-flowers-102
+    "img_extension": "jpg",  # extension of the images in the dataset.
     "name_classes": "encoding.yaml",  # {'benign': 0, 'malignant': 1},  # dict. name classes and corresponding int. If
     # dict if too big,
     # you can dump it in the fold folder in a yaml file. We will load it when needed. Use the name of the file.
-    "nbr_classes": 200,  # Total number of classes. glas: 2, Caltech-UCSD-Birds-200-2011: 200.
+    "nbr_classes": 102,  # Total number of classes. glas: 2, Caltech-UCSD-Birds-200-2011: 200.
     "split": 0,  # split id.
     "fold": 0,  # folder id.
     "fold_folder": "./folds",  # relative path to the folder of the folds.
@@ -90,7 +91,7 @@ config = {
         "name": "resnet101",  # name of the classifier.
         "pretrained": True,  # use/or not the ImageNet pretrained models.
         # =============================  classifier ==========================
-        "num_classes": 200,  # number of output classes. glas: 2, Caltech-UCSD-Birds-200-2011: 200.
+        "num_classes": 102,  # number of output classes. glas: 2, Caltech-UCSD-Birds-200-2011: 200.
         "scale": (0.5, 0.5),  # ratio used to scale the input images for the classifier.
         "modalities": 5,  # number of modalities (wildcat).
         "kmax": 0.1,  # kmax. (wildcat)

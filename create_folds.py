@@ -5,7 +5,7 @@ Splits the following dataset into k-folds:
 """
 
 import glob
-from os.path import join
+from os.path import join, relpath, basename, splitext, isfile
 import os
 import traceback
 import random
@@ -14,9 +14,13 @@ import math
 import csv
 import copy
 import getpass
+import fnmatch
 
 import yaml
 import numpy as np
+from scipy.io import loadmat
+from PIL import Image, ImageChops
+import tqdm
 
 
 from tools import chunk_it, Dict2Obj, announce_msg
@@ -460,6 +464,153 @@ def split_valid_Caltech_UCSD_Birds_200_2011(args):
     print("All Caltech_UCSD_Birds_200_2011 splitting (`{}`) ended with success .... [OK]".format(args.nbr_splits))
 
 
+def find_files_pattern(fd_in_, pattern_):
+    """
+    Find paths to files with pattern within a folder recursively.
+    :return:
+    """
+    assert os.path.exists(fd_in_), "Folder {} does not exist .... [NOT OK]".format(fd_in_)
+    files = []
+    for r, d, f in os.walk(fd_in_):
+        for file in f:
+            if fnmatch.fnmatch(file, pattern_):
+                files.append(os.path.join(r, file))
+
+    return files
+
+
+def create_bin_mask_Oxford_flowers_102(args):
+    """
+    Create binary masks.
+    :param args:
+    :return:
+    """
+    def get_id(pathx, basex):
+        """
+        Get the id of a sample.
+        :param pathx:
+        :return:
+        """
+        rpath = relpath(pathx, basex)
+        basen = basename(rpath)
+        id = splitext(basen)[0].split('_')[1]
+        return id
+
+    baseurl = args.baseurl
+    imgs = find_files_pattern(join(baseurl, 'jpg'), '*.jpg')
+    bin_fd = join(baseurl, 'segmim_bin')
+    if not os.path.exists(bin_fd):
+        os.makedirs(bin_fd)
+    else:  # End.
+        print('Conversion to binary mask has already been done. [OK]')
+        return 0
+
+    # Background color [  0   0 254]. (blue)
+    print('Start converting the provided masks into binary masks ....')
+    for im in tqdm.tqdm(imgs, ncols=80, total=len(imgs)):
+        id_im = get_id(im, baseurl)
+        mask = join(baseurl, 'segmim', 'segmim_{}.jpg'.format(id_im))
+        assert isfile(mask), 'File {} does not exist. Inconsistent logic. .... [NOT OK]'.format(mask)
+        msk_in = Image.open(mask, 'r').convert('RGB')
+        arr_ = np.array(msk_in)
+        arr_[:, :, 0] = 0
+        arr_[:, :, 1] = 0
+        arr_[:, :, 2] = 254
+        blue = Image.fromarray(arr_.astype(np.uint8), mode='RGB')
+        dif = ImageChops.subtract(msk_in, blue)
+        x_arr = np.array(dif)
+        x_arr = np.mean(x_arr, axis=2)
+        x_arr = (x_arr != 0).astype(np.uint8)
+        img_bin = Image.fromarray(x_arr * 255, mode='L')
+        img_bin.save(join(bin_fd, 'segmim_{}.jpg'.format(id_im)), 'JPEG')
+
+
+def split_Oxford_flowers_102(args):
+    """
+    Use the provided split: http://www.robots.ox.ac.uk/~vgg/data/flowers/102/setid.mat
+
+    :param args:
+    :return:
+    """
+    def dump_fold_into_csv(lsamples, outpath):
+        """
+        Write a list of RELATIVE paths into a csv file.
+        Relative paths allow running the code an any device.
+        The absolute path within the device will be determined at the running time.
+
+        csv file format: relative path to the image, relative path to the mask, class (str: int).
+
+        :param lsamples: list of str of relative paths.
+        :param outpath: str, output file name.
+        :return:
+        """
+        with open(outpath, 'w') as fcsv:
+            filewriter = csv.writer(fcsv, delimiter=',', quotechar='|', quoting=csv.QUOTE_MINIMAL)
+            for imgx, mkx, clx in lsamples:
+                filewriter.writerow([imgx, mkx, clx])
+    baseurl = args.baseurl
+
+    # splits
+    fin = loadmat(join(baseurl, 'setid.mat'))
+    trnid = fin['trnid'].reshape((-1)).astype(np.uint16)
+    valid = fin['valid'].reshape((-1)).astype(np.uint16)
+    tstid = fin['tstid'].reshape((-1)).astype(np.uint16)
+
+    # labels
+    flabels = loadmat(join(baseurl, 'imagelabels.mat'))['labels'].flatten()
+    flabels -= 1  # labels are encoded from 1 to 102. We change that to be from 0 to 101.
+
+    # find all the files
+    fdimg = join(baseurl, 'jpg')
+    tr_set, vl_set, ts_set = [], [], []  # (img, mask, label (int))
+    filesin = find_files_pattern(fdimg, '*.jpg')
+    lid = []
+    for f in filesin:
+        rpath = relpath(f, baseurl)
+        basen = basename(rpath)
+        id = splitext(basen)[0].split('_')[1]
+        mask = join(baseurl, 'segmim_bin', 'segmim_{}.jpg'.format(id))
+        assert isfile(mask), 'File {} does not exist. Inconsistent logic. .... [NOT OK]'.format(mask)
+        rpath_mask = relpath(mask, baseurl)
+        id = int(id)  # ids start from 1. Array indexing starts from 0.
+        label = int(flabels[id - 1])
+        sample = (rpath, rpath_mask, label)
+        lid.append(id)
+        if id in trnid:
+            tr_set.append(sample)
+        elif id in valid:
+            vl_set.append(sample)
+        elif id in tstid:
+            ts_set.append(sample)
+        else:
+            raise ValueError('ID:{} not found in train, valid, test. Inconsistent logic. ....[NOT OK]'.format(id))
+
+    print('Number of samples:\n'
+          'Train: {} \n'
+          'valid: {} \n'
+          'Test: {}\n'
+          'Toal: {}'.format(len(tr_set), len(vl_set), len(ts_set), len(tr_set) + len(vl_set) + len(ts_set)))
+
+    dict_classes_names = dict()
+    uniquel = np.unique(flabels)
+    for i in range(uniquel.size):
+        dict_classes_names[str(uniquel[i])] = int(uniquel[i])
+
+    outd = args.fold_folder
+    out_fold = join(outd, "split_" + str(0) + "/fold_" + str(0))
+    if not os.path.exists(out_fold):
+        os.makedirs(out_fold)
+
+    dump_fold_into_csv(tr_set, join(out_fold, "train_s_" + str(0) + "_f_" + str(0) + ".csv"))
+    dump_fold_into_csv(vl_set, join(out_fold, "valid_s_" + str(0) + "_f_" + str(0) + ".csv"))
+    dump_fold_into_csv(ts_set, join(out_fold, "test_s_" + str(0) + "_f_" + str(0) + ".csv"))
+
+    with open(join(out_fold, "encoding.yaml"), 'w') as f:
+        yaml.dump(dict_classes_names, f)
+    with open(join(args.fold_folder, "encoding.yaml"), 'w') as f:
+        yaml.dump(dict_classes_names, f)
+
+
 # =========================================================================================
 #                               RUN
 # =========================================================================================
@@ -480,6 +631,7 @@ def do_glas():
     reproducibility.set_seed()
 
     # ===========================
+
     warnings.warn("You are accessing an anonymized part of the code. We are going to exit. Come here and fix this "
                   "according to your setup. Issue: absolute path to GlaS dataset.")
     sys.exit(0)
@@ -543,9 +695,85 @@ def do_Caltech_UCSD_Birds_200_2011():
     split_valid_Caltech_UCSD_Birds_200_2011(Dict2Obj(args))
 
 
+def do_Oxford_flowers_102():
+    """
+    Oxford-flowers-102.
+    The train/valid/test sets are already provided.
+
+    :return:
+    """
+    # ===============
+    # Reproducibility
+    # ===============
+
+    # ===========================
+
+    reproducibility.set_seed()
+
+    # ===========================
+    warnings.warn("You are accessing an anonymized part of the code. We are going to exit. Come here and fix this "
+                  "according to your setup. Issue: absolute path to Oxford-flowers-102 dataset.")
+    sys.exit(0)
+    username = getpass.getuser()
+    if username == "XXXXXXXXXXXXXXXXXXXX":
+        baseurl = "/XXXXXXXXXXXXXXXXXXX/XXXXXXXXXXXXXXXXXXXXXXX/XXXXXXXXXXXXXXXXXXXXXXXX/datasets/Oxford-flowers-102"
+    elif username == "XXXXXXXXXXXXXXXXXXX":
+        baseurl = "/XXXXXXXXXXXXXXXXXXXX/XXXXXXXXXXXXXXXXXXX/XXXXXXXXXXXXXXXXXXXX/workspace/datasets/Oxford-flowers-102"
+    else:
+        raise ValueError("Cause: anonymization of the code. username `{}` unknown. Set the absolute path to the Oxford-flowers-102 dataset. See above for an example .... [NOT OK]".format(username))
+
+
+    args = {"baseurl": baseurl,
+            "dataset": "Oxford-flowers-102",
+            "fold_folder": "folds/Oxford-flowers-102",
+            "img_extension": "jpg",
+            "path_encoding": "folds/Oxford-flowers-102/encoding-origine.yaml"
+            }
+    # Convert masks into binary masks.
+    create_bin_mask_Oxford_flowers_102(Dict2Obj(args))
+    reproducibility.set_seed()
+    split_Oxford_flowers_102(Dict2Obj(args))
+
+    # Find min max size.
+    def find_stats(argsx):
+        """
+
+        :param argsx:
+        :return:
+        """
+        minh, maxh, minw, maxw = None, None, None, None
+        baseurl = argsx.baseurl
+        fin = find_files_pattern(join(baseurl, 'jpg'), '*.jpg')
+        print("Computing stats from {} dataset ...".format(argsx.dataset))
+        for f in tqdm.tqdm(fin, ncols=80, total=len(fin)):
+            w, h = Image.open(f, 'r').convert('RGB').size
+            if minh is None:
+                minh = h
+                maxh = h
+                minw = w
+                maxw = w
+            else:
+                minh = min(minh, h)
+                maxh = max(maxh, h)
+                minw = min(minw, w)
+                maxw = max(maxw, w)
+
+        print('Stats {}:\n'
+              'min h: {} \n'
+              'max h: {} \n'
+              'min w: {} \n'
+              'max w: {} \n'.format(argsx.dataset, minh, maxh, minw, maxw))
+
+    find_stats(Dict2Obj(args))
+
+
+
 if __name__ == "__main__":
     # ============== CREATE FOLDS OF GlaS DATASET
     # do_glas()
 
     # ============== CREATE FOLDS OF Caltech-UCSD-Birds-200-2011 DATASET
-    do_Caltech_UCSD_Birds_200_2011()
+    # do_Caltech_UCSD_Birds_200_2011()
+
+    # ============== CREATE FOLDS OF Oxford-flowers-102 DATASET
+    do_Oxford_flowers_102()

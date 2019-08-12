@@ -48,13 +48,16 @@ def train_one_epoch(model, optimizer, dataloader, criterion, device, tr_stats, e
         model.zero_grad()
 
         t_l, l_p, l_n, l_c_s = 0., 0., 0., 0.
+        prngs_cuda = None  # TODO: crack in optimal code.
 
         # Optimization:
         if model.nbr_times_erase == 0:  # no erasing.
             if not ALLOW_MULTIGPUS:
-                assert NBRGPUS <= 1, "Something wrong. You deactivated multigpu mode, but we find {} GPUs. This will " \
-                                     "not guarantee reproducibility. We do not know why you did that. Exiting " \
-                                     ".... [NOT OK]".format(NBRGPUS)
+                if "CC_CLUSTER" in os.environ.keys():  # TODO: crack in optimal code.
+                    assert NBRGPUS <= 1, "Something wrong. You deactivated multigpu mode, but we find {} GPUs. " \
+                                         "This will " \
+                                         "not guarantee reproducibility. We do not know why you did that. Exiting " \
+                                         ".... [NOT OK]".format(NBRGPUS)
                 seeds_threads = None
             else:
                 assert NBRGPUS > 1, "Something is wrong. You asked for multigpu mode. But, we found {} GPUs. Exiting " \
@@ -72,8 +75,10 @@ def train_one_epoch(model, optimizer, dataloader, criterion, device, tr_stats, e
                     prngs_cuda.append(torch.cuda.get_rng_state())
                 reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
 
+            if prngs_cuda is not None and prngs_cuda != []:  # TODO: crack in optimal code.
+                prngs_cuda = torch.stack(prngs_cuda)
             reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
-            output = model(x=data, seed=seeds_threads, prngs_cuda=torch.stack(prngs_cuda))  # --> out_pos, out_neg,
+            output = model(x=data, seed=seeds_threads, prngs_cuda=prngs_cuda)  # --> out_pos, out_neg,
             reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
             # masks
             _, _, _, scores_seg, _ = output
@@ -105,13 +110,16 @@ def train_one_epoch(model, optimizer, dataloader, criterion, device, tr_stats, e
             er = 0
             while history.sum() > 0:
 
+                prngs_cuda = None  # TODO: crack in optimal code.
                 if er >= model.nbr_times_erase:  # if we exceed the maximum, stop looping. We are not looping
                     # forever!! aren't we?
                     break
                 if not ALLOW_MULTIGPUS:
-                    assert NBRGPUS <= 1, "Something wrong. You deactivated multigpu mode, but we find {} GPUs. This " \
-                                         "will not guarantee reproducibility. We do not know why you did that. " \
-                                         "Exiting .... [NOT OK]".format(NBRGPUS)
+                    if "CC_CLUSTER" in os.environ.keys():  # TODO: crack in optimal code.
+                        assert NBRGPUS <= 1, "Something wrong. You deactivated multigpu mode, but we find {} GPUs." \
+                                             " This " \
+                                             "will not guarantee reproducibility. We do not know why you did that. " \
+                                             "Exiting .... [NOT OK]".format(NBRGPUS)
                     seeds_threads = None
                 else:
                     assert NBRGPUS > 1, "Something is wrong. You asked for multigpu mode. But, we found {} GPUs. " \
@@ -129,13 +137,15 @@ def train_one_epoch(model, optimizer, dataloader, criterion, device, tr_stats, e
                         prngs_cuda.append(torch.cuda.get_rng_state())
                     reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
 
+                if prngs_cuda is not None and prngs_cuda != []:  # TODO: crack in optimal code.
+                    prngs_cuda = torch.stack(prngs_cuda)
                 reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
                 mask, scores_seg, _ = model(x=data, code="segment", seed=seeds_threads,
-                                            prngs_cuda=torch.stack(prngs_cuda))  # model.segment(data) mask is
+                                            prngs_cuda=prngs_cuda)  # model.segment(data) mask is
                 # detached! (mask is continuous)
                 reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
                 mask, _, _ = model(x=data, code="get_mask_xpos_xneg", mask_c=mask, seed=seeds_threads,
-                                   prngs_cuda=torch.stack(prngs_cuda))  #
+                                   prngs_cuda=prngs_cuda)  #
                 reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
                 # model.get_mask_xpos_xneg(data, mask)  # mask = M+.
 
@@ -199,11 +209,14 @@ def train_one_epoch(model, optimizer, dataloader, criterion, device, tr_stats, e
             x_neg = data_safe * m_neg
             x_pos = data_safe * m_pos
 
+            prngs_cuda = None  # TODO: crack in optimal code.
+
             # Classify
             if not ALLOW_MULTIGPUS:
-                assert NBRGPUS == 1, "Something wrong. You deactivated multigpu mode, but we find {} GPUs. This " \
-                                     "will not guarantee reproducibility. We do not know why you did that. " \
-                                     "Exiting .... [NOT OK]".format(NBRGPUS)
+                if "CC_CLUSTER" in os.environ.keys():  # TODO: crack in optimal code.
+                    assert NBRGPUS == 1, "Something wrong. You deactivated multigpu mode, but we find {} GPUs. This " \
+                                         "will not guarantee reproducibility. We do not know why you did that. " \
+                                         "Exiting .... [NOT OK]".format(NBRGPUS)
                 seeds_threads = None
             else:
                 assert NBRGPUS > 1, "Something is wrong. You asked for multigpu mode. But, we found {} GPUs. " \
@@ -221,12 +234,14 @@ def train_one_epoch(model, optimizer, dataloader, criterion, device, tr_stats, e
                     prngs_cuda.append(torch.cuda.get_rng_state())
                 reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
 
+            if prngs_cuda is not None and prngs_cuda != []:  # TODO: crack in optimal code.
+                prngs_cuda = torch.stack(prngs_cuda)
             reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
             out_pos = model(x=x_pos, code="classify", seed=seeds_threads,
-                            prngs_cuda=torch.stack(prngs_cuda))  # model.classify(x_pos)
+                            prngs_cuda=prngs_cuda)  # model.classify(x_pos)
             reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
             out_neg = model(x=x_neg, code="classify", seed=seeds_threads,
-                            prngs_cuda=torch.stack(prngs_cuda))  # model.classify(x_neg)
+                            prngs_cuda=prngs_cuda)  # model.classify(x_neg)
             reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
 
             output = out_pos, out_neg, None, None, None
@@ -341,7 +356,7 @@ def validate(model, dataset, dataloader, criterion, device, stats, epoch=0, call
             _, h, w = mask_t[0].size()
             hp, wp = mask_pred.shape
 
-            if dataset.dataset_name == "Caltech-UCSD-Birds-200-2011":
+            if dataset.dataset_name in ["Caltech-UCSD-Birds-200-2011", "Oxford-flowers-102"]:
                 # Remove the padding if is there was any. (the only one allowed: force_div_32)
                 assert dataset.padding_size is None, "dataset.padding_size is supposed to be None. We do not support" \
                                                      "padding of this type for this dataset."

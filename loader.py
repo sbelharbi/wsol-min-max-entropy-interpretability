@@ -208,12 +208,14 @@ class PhotoDataset(Dataset):
         self.up_scale_small_dim_to = up_scale_small_dim_to
         self.do_not_save_samples = do_not_save_samples
 
-        assert dataset_name in ["glas", "Caltech-UCSD-Birds-200-2011"], "dataset_name = {} unsupported. Please double" \
-                                                                        "check. We do some operations that are " \
-                                                                        "dataset dependent. So, you may need to do " \
-                                                                        "these operations on your own (mask " \
-                                                                        "binarization, ...). Exiting .... [NOT " \
-                                                                        "OK]".format(dataset_name)
+        assert dataset_name in [
+            "glas", "Caltech-UCSD-Birds-200-2011", "Oxford-flowers-102"], "dataset_name = {} unsupported. Please " \
+                                                                          "double" \
+                                                                          "check. We do some operations that are " \
+                                                                          "dataset dependent. So, you may need to do " \
+                                                                          "these operations on your own (mask " \
+                                                                          "binarization, ...). Exiting .... [NOT " \
+                                                                          "OK]".format(dataset_name)
         if dataset_name != "glas":
             assert padding_size is None, "We do not support padding train/test for data other than Glas set."
 
@@ -312,11 +314,16 @@ class PhotoDataset(Dataset):
         # Caltech-UCSD-Birds-200-2011: a pixel belongs to the mask if its value > 255/2. (an image is annotated
         # by many workers. If more than half of the workers agreed on the pixel to be a bird, we consider that
         # pixel as a bird.
+
+        # Oxford-flowers-102: a pixel belongs to the mask if its value > 0. The mask has only {0, 255} as values. The
+        # new binary mask will contain only {0, 1} values where 0 is the background and 1 is the foreground.
         mask_np = np.array(mask)
         if self.dataset_name == "glas":
             mask_np = (mask_np != 0).astype(np.uint8)
         elif self.dataset_name == "Caltech-UCSD-Birds-200-2011":
             mask_np = (mask_np > (255 / 2.)).astype(np.uint8)
+        elif self.dataset_name == 'Oxford-flowers-102':
+            mask_np = (mask_np != 0).astype(np.uint8)
         else:
             raise ValueError("Dataset name {} unsupported. Exiting .... [NOT OK]".format(self.dataset_name))
 

@@ -35,11 +35,10 @@ import torch.nn as nn
 import reproducibility
 
 
-# TODO: check work on Glas: https://arxiv.org/pdf/1603.00275.pdf
 FACTOR_MUL_WORKERS = 2  # args.num_workers * this_factor. Useful when setting set_for_eval to False, batch size =1,
 # and we are in an evaluation mode (to go faster and coop with the lag between the CPU and GPU).
-DEBUG_MODE = False  # Can be activated only for "Caltech-UCSD-Birds-200-2011" dataset to go fast. If True,
-# we select only few samples for training, validation, and test.
+DEBUG_MODE = False  # Can be activated only for "Caltech-UCSD-Birds-200-2011" or "Oxford-flowers-102"
+# dataset to go fast. If True, we select only few samples for training, validation, and test.
 PLOT_STATS = False
 
 
@@ -87,11 +86,7 @@ if __name__ == "__main__":
     DEVICE = get_device(args)
     CPUDEVICE = get_cpu_device()
 
-    # TODO:
-    #  In the case where the train loss is regularized, check if using the same loss for model selection is better than
-    #  using only the plain cross-entropy.
     CRIT_TR = instantiate_train_loss(args).to(DEVICE)
-    # TODO: use the same total loss. Fix totalloss to adjust automatically to the number of inputs.
     CRIT_EV = instantiate_eval_loss(args).to(DEVICE)
 
     FOLDER = '.'
@@ -131,12 +126,7 @@ if __name__ == "__main__":
 
     log(training_log, "\n\n ########### Training #########\n\n")
     log(results_log, "\n\n ########### Results #########\n\n")
-    # TODO: improve the logger.
-    # check this https://stackoverflow.com/questions/4675728/redirect-stdout-to-a-file-in-python
 
-    # TODO:
-    #  check how Visdom/tensorboard works in Pytorch. Check also other visualization tools for future references such as
-    #  this: https://medium.com/apache-mxnet/mxboard-mxnet-data-visualization-2eed6ae31d2c
     callback = None
 
     # ==========================================================
@@ -186,6 +176,14 @@ if __name__ == "__main__":
         test_samples = test_samples[:20]
         reproducibility.force_seed(int(os.environ["MYSEED"]))
 
+    if DEBUG_MODE and (args.dataset == "Oxford-flowers-102"):
+        reproducibility.force_seed(int(os.environ["MYSEED"]))
+        warnings.warn("YOU ARE IN DEBUG MODE!!!!")
+        # train_samples = random.sample(train_samples, 100)
+        # valid_samples = random.sample(valid_samples, 5)
+        # test_samples = test_samples[:20]
+        reproducibility.force_seed(int(os.environ["MYSEED"]))
+
     if DEBUG_MODE and (args.dataset == "glas"):
         reproducibility.force_seed(int(os.environ["MYSEED"]))
         warnings.warn("YOU ARE IN DEBUG MODE!!!!")
@@ -193,10 +191,6 @@ if __name__ == "__main__":
         valid_samples = random.sample(valid_samples, 5)
         test_samples = test_samples[:20]
         reproducibility.force_seed(int(os.environ["MYSEED"]))
-
-    # TODO:
-    #  Augment validation set by performing multiple transformations over the original data, and storing it on disc. See
-    #  if it is possible to not-store on disc the transformed data and augment in a deterministic way on the fly.
 
     announce_msg("creating datasets and dataloaders")
 
@@ -274,14 +268,12 @@ if __name__ == "__main__":
     best_val_loss = np.finfo(np.float32).max
     best_epoch = 0
 
-    # TODO: validate before start training.
-
     announce_msg("start training")
     reproducibility.force_seed(int(os.environ["MYSEED"]))
     tx0 = dt.datetime.now()
 
     for epoch in range(args.max_epochs):
-        # TODO: IN THE FUTURE: DO NOT USE MAX_EPOCHS IN THE COMPUTATION OF THE CURRENT SEED!!!!
+        # IN THE FUTURE: DO NOT USE MAX_EPOCHS IN THE COMPUTATION OF THE CURRENT SEED!!!!
         # REPLACE IT WITH A CONSTANT (400 IN OUR CASE ON GLAS)
         reproducibility.force_seed(int(os.environ["MYSEED"]) + (epoch + 1) * 10000 + 400)
         trainset.set_up_new_seeds()
@@ -302,7 +294,6 @@ if __name__ == "__main__":
 
         if lr_scheduler:  # for > 1.1 : opt.step() then l_r_s.step().
             lr_scheduler.step(epoch)
-        # TODO: Which criterion to use over the validation set? (in case this loss is used for model selection).
         # Eval validation set.
         reproducibility.force_seed(int(os.environ["MYSEED"]) + (epoch + 5) * 10000 + 400)
         vl_stats, stats_vl_now, pred_vl = validate(model=model, dataset=validset, dataloader=valid_loader,
@@ -311,16 +302,9 @@ if __name__ == "__main__":
                                                    callback=callback, log_file=training_log, name_set="valid")
 
         reproducibility.force_seed(int(os.environ["MYSEED"]) + (epoch + 6) * 10000 + 400)
-        # Eval train set. (entire image not patches).
-        # tr_eval_stats, stats_tr_ev_now, pred_tr_eval = validate(model=model, dataset=trainset_eval,
-        #                                                         dataloader=train_eval_loader,
-        #                                                         criterion=CRIT_EV, device=DEVICE,,
-        #                                                         stats=tr_eval_stats, epoch=epoch, callback=callback,
-        #                                                         log_file=training_log,  name_set="train")
 
         error_vl = vl_stats["errors"][-1]
 
-        # TODO: Revise the model selection.
         if error_vl <= best_val_error:  # and loss <= best_val_loss:
             best_val_error = error_vl
             best_val_loss = vl_stats["loss_pos"][-1]
@@ -337,29 +321,6 @@ if __name__ == "__main__":
                 "Train stats. Best epoch: {}.".format(best_epoch))
             plot_curves(vl_stats, join(OUTD_VL.folder, "validation.png"),
                         "Eval (validation set) stats. Best epoch: {}.".format(best_epoch))
-            # plot_curves(
-            #     tr_eval_stats, join(OUTD_TR.folder, "train-ev.png"),
-            #     "Eval (train set) stats. . Best epoch: {}.".format(best_epoch))
-
-            # # Plot the probability dist.
-            # plot_hist_probs_pos_neg({"probs_pos": pred_tr_eval["probs_pos"],
-            #                          "probs_neg": pred_tr_eval["probs_neg"]},
-            #                         path=join(OUTD_TR.prob_evol, "train_prob+-_{}.png".format(epoch)),
-            #                         epoch=epoch, title="Train eval. Probs.dist.")
-            # plot_hist_probs_pos_neg({"probs_pos": pred_vl["probs_pos"],
-            #                          "probs_neg": pred_vl["probs_neg"]},
-            #                         path=join(OUTD_VL.prob_evol, "valid_prob+-_{}.png".format(epoch)),
-            #                         epoch=epoch, title="Validation. Probs.dist.")
-            #
-            # # Plot ROC curves.
-            # plot_roc_curve(y_mask=stats_tr_ev_now["for_roc"]["y_mask"],
-            #                y_hat_mask=stats_tr_ev_now["for_roc"]["y_hat_mask"],
-            #                epoch=epoch, path=join(OUTD_TR.roc_evol, "train_roc_{}.png".format(epoch)),
-            #                title="Train. ROC.", plot_extreme=True)
-            # plot_roc_curve(y_mask=stats_vl_now["for_roc"]["y_mask"],
-            #                y_hat_mask=stats_vl_now["for_roc"]["y_hat_mask"],
-            #                epoch=epoch, path=join(OUTD_VL.roc_evol, "train_roc_{}.png".format(epoch)),
-            #                title="Validation. ROC.", plot_extreme=True)
 
     # =====================================================================================
     #                                   DO CLOSING-STUFF BEFORE LEAVING
@@ -386,7 +347,7 @@ if __name__ == "__main__":
 
     announce_msg("start final processing stage")
 
-    if DEBUG_MODE and (args.dataset == "Caltech-UCSD-Birds-200-2011"):
+    if DEBUG_MODE and (args.dataset in ["Caltech-UCSD-Birds-200-2011", "Oxford-flowers-102"]):
         reproducibility.force_seed(int(os.environ["MYSEED"]))
         testset = PhotoDataset(
             test_samples, args.dataset, args.name_classes, transform_tensor,
