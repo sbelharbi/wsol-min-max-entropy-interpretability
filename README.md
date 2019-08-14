@@ -13,6 +13,9 @@
 }
 ```
 
+# Prediction (test samples. More results with high resolution are in [./demo.md](./demo.md)):
+![all-predictions](doc/paper.png)
+
 # Reproducibility (Single GPU: 100% reproducible):
 
 We took a particular care to the reproducibility of the code.
@@ -67,6 +70,13 @@ All the credits of the SynchBN go to Tamaki Kojima(tamakoji@gmail.com) (https://
 ## Recursive erasing algorithm:
 ![erasing algorithm](doc/accumulative.jpg)
 
+# Datasets:
+* [GlaS](https://warwick.ac.uk/fac/sci/dcs/research/tia/glascontest)
+* [Caltech-UCSD Birds-200-2011](http://www.vision.caltech.edu/visipedia/CUB-200-2011.html)
+* [Oxford flower 102](http://www.robots.ox.ac.uk/~vgg/data/flowers/102/)
+
+![Datasets](doc/samples.png)
+
 # Download datasets:
 
 * GlaS: [./download-glas-dataset.sh](./download-glas-dataset.sh).
@@ -74,6 +84,8 @@ All the credits of the SynchBN go to Tamaki Kojima(tamakoji@gmail.com) (https://
 * Oxford flower 102: [./download-Oxford-flowers-102-dataset.sh](./download-Oxford-flowers-102-dataset.sh)
 
 You find the splits in [./folds](./folds). The code that generated the splits is [./create_folds.py](./create_folds.py).
+
+
 
 # Requirements:
 We use [torch_nightly-1.2.0.dev20190616](https://pytorch.org/) and [Python 3.7.0](https://www.python.org). For installation, see [
@@ -118,13 +130,3 @@ python train_deepmil.py --cudaid 1 --yaml glas-no-erase.yaml --kmin 0.09 --kmax 
 --nbrerase 0 --epocherase 1 --stepsize 40 --bsize 8  --modalities 5 --lr 0.001 --fold 0 --wdecay 1e-05 --alpha 0.2
 ```
 See all the keys that you can override using the command line in  [tools.get_yaml_args()](./tools.py).
-
-# Datasets:
-* [GlaS](https://warwick.ac.uk/fac/sci/dcs/research/tia/glascontest)
-* [Caltech-UCSD Birds-200-2011](http://www.vision.caltech.edu/visipedia/CUB-200-2011.html)
-* [Oxford flower 102](http://www.robots.ox.ac.uk/~vgg/data/flowers/102/)
-
-![Datasets](doc/samples.png)
-
-# Prediction (test samples. More results with high resolution are in [./demo.md](./demo.md)):
-![all-predictions](doc/paper.png)
