@@ -35,7 +35,7 @@
 
 ![Datasets](doc/samples.png)
 
-# Download datasets:
+## Download datasets:
 
 * GlaS: [./download-glas-dataset.sh](./download-glas-dataset.sh).
 * Caltech-UCSD Birds-200-2011:  [./download-caltech-ucsd-birds-200-2011-dataset.sh](./download-caltech-ucsd-birds-200-2011-dataset.sh)
