@@ -20,7 +20,7 @@
 * [Method overview](#methodOverview)
 * [Datasets](#datasets)
 
-# <a name="methodOverview"></a>Method overview:
+# <a name="methodOverview"></a> Method overview:
 ## Model:
 ![intuition](doc/regions.jpg)
 
@@ -28,7 +28,7 @@
 ## Recursive erasing algorithm:
 ![erasing algorithm](doc/accumulative.jpg)
 
-# Datasets:
+# <a name="datasets"></a> Datasets:
 * [GlaS](https://warwick.ac.uk/fac/sci/dcs/research/tia/glascontest)
 * [Caltech-UCSD Birds-200-2011](http://www.vision.caltech.edu/visipedia/CUB-200-2011.html)
 * [Oxford flower 102](http://www.robots.ox.ac.uk/~vgg/data/flowers/102/)
