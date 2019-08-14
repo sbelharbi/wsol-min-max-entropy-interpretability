@@ -20,7 +20,7 @@
 * [Requirements](#requirements)
 * [How to run the code](#runCode)
 * [Reproducibility](#reproducibility)
-* [MultiGPU support](#multigpuSupport)
+* [MultiGPU support and reproducibility](#multigpuSupport)
 * [Synchronized-Batch-Norm support (MultiGPUs)](#synchBNSupportMultigpu)
 
 # Prediction (test samples. More results with high resolution are in [./demo.md](./demo.md)):
