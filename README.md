@@ -1,11 +1,11 @@
-# Pytorch code for: `Weakly Supervised Localization using Min-Max Entropy: an Interpretable Framework`
+# Pytorch code for: `Min-max Entropy for Weakly Supervised Pixel-wise Localization: an Interpretable Framework`
 
 * **arXiv**: [https://arxiv.org/abs/1907.12934](https://arxiv.org/abs/1907.12934)
 
 * **If you use this code, please cite our work**:
 ```
 @article{belharbi2019weakly,
-  title={Weakly Supervised Localization using Min-Max Entropy: an Interpretable Framework},
+  title={Min-max Entropy for Weakly Supervised Pixel-wise Localization: an Interpretable Framework},
   author={Belharbi, S. and Rony, J. and Dolz, J. and Ben Ayed, I. and McCaffrey, L. and Granger, E.},
   journal={coRR},
   volume={abs/1907.12934},
