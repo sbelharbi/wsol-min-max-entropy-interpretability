@@ -5,8 +5,7 @@
 * **If you use this code, please cite our work**:
 ```
 @article{belharbi2019weakly,
-  title={Min-max Entropy for Weakly Supervised Pointwise Localization
-},
+  title={Min-max Entropy for Weakly Supervised Pointwise Localization},
   author={Belharbi, S. and Rony, J. and Dolz, J. and Ben Ayed, I. and McCaffrey, L. and Granger, E.},
   journal={coRR},
   volume={abs/1907.12934},
