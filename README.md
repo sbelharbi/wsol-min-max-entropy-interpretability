@@ -1,5 +1,4 @@
-# Pytorch code for: `Min-max Entropy for Weakly Supervised Pointwise Localization
-`
+# Pytorch code for: `Min-max Entropy for Weakly Supervised Pointwise Localization`
 
 * **arXiv**: [https://arxiv.org/abs/1907.12934](https://arxiv.org/abs/1907.12934)
 
