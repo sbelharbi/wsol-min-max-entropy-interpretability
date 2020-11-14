@@ -1,6 +1,4 @@
-# Pytorch code for: `Min-max Entropy for Weakly Supervised Pointwise Localization`
-
-* **arXiv**: [https://arxiv.org/abs/1907.12934](https://arxiv.org/abs/1907.12934)
+### Pytorch code for: `Min-max Entropy for Weakly Supervised Pointwise Localization` [(arxiv.org/abs/1907.12934)](https://arxiv.org/abs/1907.12934)
 
 * **If you use this code, please cite our work**:
 ```
@@ -14,36 +12,41 @@
 ```
 
 ### Content:
-* [Demo](#prediction-test-samples-more-results-with-high-resolution-are-in-demomd)
-* [Method overview](#methodOverview)
-* [Datasets](#datasets)
-* [Requirements](#requirements)
-* [How to run the code](#runCode)
-* [Reproducibility](#reproducibility)
-* [MultiGPU support and reproducibility](#multigpuSupport)
-* [Synchronized-Batch-Norm support (MultiGPUs)](#synchBNSupportMultigpu)
+1. [Demo](#prediction-test-samples-more-results-with-high-resolution-are-in-demomd)
+2. [Method overview](#methodOverview)
+3. [Datasets](#datasets)
+4. [Requirements](#requirements)
+5. [How to run the code](#runCode)
+6. [Reproducibility](#reproducibility)
+7. [MultiGPU support and reproducibility](#multigpuSupport)
+8. [Synchronized-Batch-Norm support (MultiGPUs)](#synchBNSupportMultigpu)
 
-# Prediction (test samples. More results with high resolution are in [./demo.md](./demo.md)):
-![all-predictions](doc/paper.png)
+### 1. Prediction (test samples. More results with high resolution are in [./demo.md](./demo.md)):
+
+<img src="doc/paper.png" alt="paper" width="600">
 
 
 
-# <a name="methodOverview"></a> Method overview:
-## Model:
-![intuition](doc/regions.jpg)
+### 2. <a name="methodOverview"></a> Method overview:
+#### 2.1. Model:
+<img src="doc/regions.jpg" alt="regions" width="600">
 
-![model](doc/model.jpg)
-## Recursive erasing algorithm:
-![erasing algorithm](doc/accumulative.jpg)
+<img src="doc/model.jpg" alt="model" width="600">
 
-# <a name="datasets"></a> Datasets:
+#### 2.2. Recursive erasing algorithm:
+<img src="doc/accumulative.jpg" alt="accumulative" width="600">
+
+### 3. <a name="datasets"></a> Datasets:
+
+#### 3.1. Links to datasets:
 * [GlaS](https://warwick.ac.uk/fac/sci/dcs/research/tia/glascontest)
 * [Caltech-UCSD Birds-200-2011](http://www.vision.caltech.edu/visipedia/CUB-200-2011.html)
 * [Oxford flower 102](http://www.robots.ox.ac.uk/~vgg/data/flowers/102/)
 
-![Datasets](doc/samples.png)
 
-## Download datasets:
+<img src="doc/samples.png" alt="samples" width="600">
+
+#### 3.2. Download datasets:
 
 * GlaS: [./download-glas-dataset.sh](./download-glas-dataset.sh).
 * Caltech-UCSD Birds-200-2011:  [./download-caltech-ucsd-birds-200-2011-dataset.sh](./download-caltech-ucsd-birds-200-2011-dataset.sh)
@@ -53,7 +56,7 @@ You find the splits in [./folds](./folds). The code that generated the splits is
 
 
 
-# <a name="requirements"></a> Requirements:
+### 4. <a name="requirements"></a> Requirements:
 We use [torch_nightly-1.2.0.dev20190616](https://pytorch.org/) and [Python 3.7.0](https://www.python.org). For installation, see [
 ./dependencies](
 ./dependencies) for a way on how to install the requirements within a virtual environment.
@@ -70,7 +73,7 @@ Installing some packages manually:
 git+https://github.com/lucasb-eyer/pydensecrf.git@4d5343c398d75d7ebae34f51a47769084ba3a613`
 
 
-# <a name="runCode"></a> How to run the code:
+### 5. <a name="runCode"></a> How to run the code:
 ```bash
 python train_deepmil.py --cudaid your_cuda_id --yaml basename_your_yaml_file
 ```
@@ -81,12 +84,12 @@ python train_deepmil.py --cudaid 1 --yaml glas-no-erase.yaml --kmin 0.09 --kmax 
 ```
 See all the keys that you can override using the command line in  [tools.get_yaml_args()](./tools.py).
 
-## General notes:
+#### 5.1. General notes:
 * All the experiments, splits generation were achieved using seed 0. See [./create_folds.py](./create_folds.py)
 * All the results in the paper were obtained using one GPU.
 * Please report any issue with reproducibility.
 
-## Paths:
+#### 5.2. Paths:
 We hard-coded some paths (to the data location). For anonymization reasons, we replaced them with fictive paths.
 So, they won't work for you. A warning will be raised with an indication to the issue. Then, the code exits. Something
 like this:
@@ -94,16 +97,16 @@ like this:
 warnings.warn("You are accessing an anonymized part of the code. We are going to exit. Come here and fix this "
                   "according to your setup. Issue: absolute path to Caltech-UCSD-Birds-200-2011 dataset.")
 ```
-## Configuration used in the paper:
+#### 5.3. Configuration used in the paper:
 The yaml files in [./config_yaml](./config_yaml) are used for each dataset.
 
-## CRF post-processing
+#### 5.4. CRF post-processing
 We use the implementation in (https://github.com/lucasb-eyer/pydensecrf).
 
 To be able to use it, first install the package. Then, you can use the class: `tools.CRF()`. Read its documentation for more details. The parameters of the CRF are in [./crf_params.py](./crf_params.py). For CUB5, CUB, OxF, we used `crf_params.cub`.
 
-# <a name="reproducibility"></a> Reproducibility
-## Reproducibility (Single GPU: 100% reproducible):
+### 6. <a name="reproducibility"></a> Reproducibility:
+#### 6.1. Reproducibility (Single GPU: 100% reproducible):
 
 We took a particular care to the reproducibility of the code.
 * The code is reproducible under [Pytorch reproducibility terms](https://pytorch.org/docs/stable/notes/randomness.html).
@@ -123,20 +126,20 @@ state of the random generators in the following code to be independent of the re
 work-around. In the future, we consider more clean, and easy way to make the operations that depend on random
 generator independent of each other.
 
-## Why nightly build version:
+#### 6.2. Why nightly build version:
 Due to some issues in the prng state of Pytorch 1.0.0, we moved to Nightly build version `1.2.0.dev20190616`
 (https://download.pytorch.org/whl/nightly/cu100/torch_nightly-1.2.0.dev20190616-cp37-cp37m-linux_x86_64.whl) which
 seems to have fixed a huge glitch in the rng. ([merge](https://github.com/pytorch/pytorch/pull/21301)). Please refer
 to [this](https://discuss.pytorch.org/t/reproducibility-over-multigpus-is-impossible-until-randomness-of-threads-is-controled-and-yet/47079?u=sbelharbi) post.
 We use this version to make multigpu case reproducible (best).
 
-# <a name="multigpuSupport"></a> MultiGPU support and reproducibility (100% reproducibility not guaranteed. Sometimes the results are different, but most of the time the results are constant):
+### 7. <a name="multigpuSupport"></a> MultiGPU support and reproducibility (100% reproducibility not guaranteed. Sometimes the results are different, but most of the time the results are constant):
 * The code supports MultGPUs.
 * Despite our effort to make the code reproducible in the case of multigpu, we achieve reproducibility but,
 sometimes it breaks. See [this](https://discuss.pytorch.org/t/reproducibility-over-multigpus-is-impossible-until-randomness-of-threads-is-controled-and-yet/47079?u=sbelharbi).
 
 
-# <a name="synchBNSupportMultigpu"></a> Synchronized-Batch-Norm support (MultiGPUs):
+#### 8. <a name="synchBNSupportMultigpu"></a> Synchronized-Batch-Norm support (MultiGPUs):
 The code supports synchronized BN. By default, SyncBN is allowed as long as multigpu mode is on. You can prevent
 using SynchBN, and get back to the standard Pytroch non-synchronized BN, using bash command, before running the code:
 ```bash
