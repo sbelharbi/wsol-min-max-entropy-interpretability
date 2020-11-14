@@ -7,7 +7,7 @@
 @article{belharbi2019weakly,
   title={Min-max Entropy for Weakly Supervised Pointwise Localization},
   author={Belharbi, S. and Rony, J. and Dolz, J. and Ben Ayed, I. and McCaffrey, L. and Granger, E.},
-  journal={coRR},
+  journal={CoRR},
   volume={abs/1907.12934},
   year={2019}
 }
