@@ -1,4 +1,4 @@
-More demo for datasets:
+More demo (high resolution images) for datasets:
 1. [Glas](#Glas)
 2. [Caltech-UCSD Birds-200-2011](#cub)
 4. [Oxford flower 102 (OxF)](#oxf)
