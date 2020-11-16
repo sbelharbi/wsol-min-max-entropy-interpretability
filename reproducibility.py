@@ -66,7 +66,7 @@ def set_seed(seed=None):
     force_seed(seed)
 
 
-def force_seed(seed):
+def force_seed(seed, check_cudnn=False):
     """
     For seed to some modules.
     :param seed: int. The current seend.
@@ -78,18 +78,23 @@ def force_seed(seed):
     torch.cuda.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
     torch.backends.cudnn.benchmark = False
-    torch.backends.cudnn.deterministic = True  # Deterministic mode can have a performance impact, depending on your
+    torch.backends.cudnn.deterministic = True  # Deterministic mode can have a
+    # performance impact, depending on your
     # model: https://pytorch.org/docs/stable/notes/randomness.html#cudnn
-    # If multigpu is on, deactivate cudnn since it has many randmon things that we can not control.
-    if torch.cuda.device_count() > 1 and os.environ["ALLOW_MULTIGPUS"] == 'True':
-        torch.backends.cudnn.enabled = False
+    if check_cudnn:
+        # If multigpu is on, deactivate cudnn since it has many randmon things
+        # that we can not control.
+        if (torch.cuda.device_count() > 1) and (
+                os.environ["ALLOW_MULTIGPUS"] == 'True'):
+            torch.backends.cudnn.enabled = False
 
 
 def manual_seed(seed):
     r"""Sets the seed for generating random numbers. Returns a
     `torch._C.Generator` object.
 
-    NOTE: WE REMOVE MANUAL RESEEDING ALL THE GPUS. At this point, it is not necessary; and there is not logic/reason
+    NOTE: WE REMOVE MANUAL RESEEDING ALL THE GPUS. At this point, it is not
+    necessary; and there is not logic/reason
     to do it since we want only to reseed the current device.
 
     Args:

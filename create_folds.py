@@ -632,17 +632,13 @@ def do_glas():
 
     # ===========================
 
-    warnings.warn("You are accessing an anonymized part of the code. We are going to exit. Come here and fix this "
-                  "according to your setup. Issue: absolute path to GlaS dataset.")
-    sys.exit(0)
-
     username = getpass.getuser()
-    if username == "XXXXXXXXXX":
-        baseurl = "/XXXXXXXXX/XXXXXXXXXX/XXXXXXXXXXXXXXX/datasets/GlaS-2015/Warwick QU Dataset (Released 2016_07_08)"
-    elif username == "XXXXXXXXXXXX":
-        baseurl = "/XXXXXX/XXXXXXX/XXXXXXXXXXXXXXXXX/workspace/datasets/GlaS-2015/Warwick QU Dataset (Released 2016_07_08)"
+    if username == "xxxx2020":
+        baseurl = "xxxx2020/datasets/GlaS-2015/Warwick QU Dataset (Released 2016_07_08)"
+    elif username == "sbelharb":
+        baseurl = "xxxx2020/datasets/GlaS-2015/Warwick QU Dataset (Released 2016_07_08)"
     else:
-        raise ValueError("Cause: anonymization of the code. username `{}` unknown. Set the absolute path to the GlaS dataset. See above for an example .... [NOT OK]".format(username))
+        raise ValueError("Cause: anonymization of the code. username `{}` unknown. Set the absolute path to the Caltech-UCSD-Birds-200-2011 dataset. See above for an example .... [NOT OK]".format(username))
 
     args = {"baseurl": baseurl,
             "folding": {"vl": 20},  # 80 % for train, 20% for validation.
@@ -671,14 +667,11 @@ def do_Caltech_UCSD_Birds_200_2011():
 
     # ===========================
 
-    warnings.warn("You are accessing an anonymized part of the code. We are going to exit. Come here and fix this "
-                  "according to your setup. Issue: absolute path to Caltech-UCSD-Birds-200-2011 dataset.")
-    sys.exit(0)
     username = getpass.getuser()
-    if username == "XXXXXXXXXXXXXXXXXXXX":
-        baseurl = "/XXXXXXXXXXXXXXXXXXX/XXXXXXXXXXXXXXXXXXXXXXX/XXXXXXXXXXXXXXXXXXXXXXXX/datasets/Caltech-UCSD-Birds-200-2011"
-    elif username == "XXXXXXXXXXXXXXXXXXX":
-        baseurl = "/XXXXXXXXXXXXXXXXXXXX/XXXXXXXXXXXXXXXXXXX/XXXXXXXXXXXXXXXXXXXX/workspace/datasets/Caltech-UCSD-Birds-200-2011"
+    if username == "xxxx2020":
+        baseurl = "xxxx2020/datasets/Caltech-UCSD-Birds-200-2011"
+    elif username == "xxxx2020":
+        baseurl = "xxxx2020/datasets/Caltech-UCSD-Birds-200-2011"
     else:
         raise ValueError("Cause: anonymization of the code. username `{}` unknown. Set the absolute path to the Caltech-UCSD-Birds-200-2011 dataset. See above for an example .... [NOT OK]".format(username))
 
@@ -711,17 +704,14 @@ def do_Oxford_flowers_102():
     reproducibility.set_seed()
 
     # ===========================
-    warnings.warn("You are accessing an anonymized part of the code. We are going to exit. Come here and fix this "
-                  "according to your setup. Issue: absolute path to Oxford-flowers-102 dataset.")
-    sys.exit(0)
-    username = getpass.getuser()
-    if username == "XXXXXXXXXXXXXXXXXXXX":
-        baseurl = "/XXXXXXXXXXXXXXXXXXX/XXXXXXXXXXXXXXXXXXXXXXX/XXXXXXXXXXXXXXXXXXXXXXXX/datasets/Oxford-flowers-102"
-    elif username == "XXXXXXXXXXXXXXXXXXX":
-        baseurl = "/XXXXXXXXXXXXXXXXXXXX/XXXXXXXXXXXXXXXXXXX/XXXXXXXXXXXXXXXXXXXX/workspace/datasets/Oxford-flowers-102"
-    else:
-        raise ValueError("Cause: anonymization of the code. username `{}` unknown. Set the absolute path to the Oxford-flowers-102 dataset. See above for an example .... [NOT OK]".format(username))
 
+    username = getpass.getuser()
+    if username == "xxxx2020":
+        baseurl = "xxxxx2020/datasets/Oxford-flowers-102"
+    elif username == "xxxx2020":
+        baseurl = "xxxx2020/datasets/Oxford-flowers-102"
+    else:
+        raise ValueError("Cause: anonymization of the code. username `{}` unknown. Set the absolute path to the Caltech-UCSD-Birds-200-2011 dataset. See above for an example .... [NOT OK]".format(username))
 
     args = {"baseurl": baseurl,
             "dataset": "Oxford-flowers-102",
@@ -770,10 +760,10 @@ def do_Oxford_flowers_102():
 
 if __name__ == "__main__":
     # ============== CREATE FOLDS OF GlaS DATASET
-    # do_glas()
+    do_glas()
 
     # ============== CREATE FOLDS OF Caltech-UCSD-Birds-200-2011 DATASET
     # do_Caltech_UCSD_Birds_200_2011()
 
     # ============== CREATE FOLDS OF Oxford-flowers-102 DATASET
-    do_Oxford_flowers_102()
+    # do_Oxford_flowers_102()

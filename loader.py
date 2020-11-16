@@ -20,7 +20,7 @@ import torch.nn.functional as F
 import reproducibility
 
 
-__all__ = ["PhotoDataset"]
+__all__ = ["PhotoDataset", "default_collate", "_init_fn"]
 
 
 def default_collate(batch):
@@ -53,6 +53,15 @@ def default_collate(batch):
     target = torch.LongTensor([item[2] for item in batch])
 
     return data, mask, target
+
+
+def _init_fn(worker_id):
+    """
+    Init. function for the worker in dataloader.
+    :param worker_id:
+    :return:
+    """
+    pass
 
 
 def csv_loader(fname, rootpath):
@@ -137,58 +146,102 @@ class PhotoDataset(Dataset):
     """
     Class that overrides torch.utils.data.Dataset.
     """
-    def __init__(self, data, dataset_name, name_classes, transform_tensor, set_for_eval, transform_img=None,
-                 resize=None, crop_size=None, padding_size=None, padding_mode="reflect", force_div_32=False,
-                 up_scale_small_dim_to=None, do_not_save_samples=False):
+    def __init__(self,
+                 data,
+                 dataset_name,
+                 name_classes,
+                 transform_tensor,
+                 set_for_eval,
+                 transform_img=None,
+                 resize=None,
+                 crop_size=None,
+                 padding_size=None,
+                 padding_mode="reflect",
+                 force_div_32=False,
+                 up_scale_small_dim_to=None,
+                 do_not_save_samples=False
+                 ):
         """
-        :param data: A list of str absolute paths of the images of dataset. In this case, no preprocessing will be used
-                (such brightness standardization, stain normalization, ...). Raw data will be used directly.
-        :param dataset_name: str, name of the dataset: glas, or Caltech-UCSD-Birds-200-2011.
+        :param data: A list of str absolute paths of the images of dataset.
+               In this case, no preprocessing will be used
+               (such brightness standardization, stain normalization, ...).
+               Raw data will be used directly.
+        :param dataset_name: str, name of the dataset: glas, or
+               Caltech-UCSD-Birds-200-2011.
         :param name_classes: dict, {"classe_name": int}.
-        :param transform_tensor: a composition of transforms that performs over torch.tensor:
+        :param transform_tensor: a composition of transforms that performs over
+               torch.tensor:
                torchvision.transforms.Compose(). or None.
-        :param set_for_eval: True/False. Used to entirely prepare the data for evaluation by performing all the
-              necessary steps to get the data ready for input to the model. Useful for the evaluation datasets such
-              as the validation set or the test test. If True we do all that, else the preparation of the data is
-              done when needed. If  dataset if LARGE AND you inscrease the size of the samples through a processing
-              step (upscaling for instance), we recommend to set this to False since you will need to a large memory.
-              In this case, the validation will be slow (you can increase the number of workers if you use a batch
-              size of 1).
-        :param transform_img: a composition of transforms that performs over images: torchvision.transforms.Compose().
-                or None.
-        :param resize: int, or sequence of two int (w, h), or None. The size to which the original image is resized.
-               If None, the original image is used. (needed only when data is a list).
-        :param crop_size: tuple of int (h, w). Size of the cropped patches. If None, no cropping is done,
-        and the entire image is used (such the case in validation).
-        :param padding_size: (h%, w%), how much to pad (top/bottom) and (left/right) of the ORIGINAL IMAGE. h,
-        w are percentages.
+        :param set_for_eval: True/False. Used to entirely prepare the data for
+               evaluation by performing all the
+               necessary steps to get the data ready for input to the model.
+               Useful for the evaluation datasets such
+               as the validation set or the test test. If True we do all
+               that, else the preparation of the data is
+               done when needed. If  dataset if LARGE AND you inscrease the
+               size of the samples through a processing
+               step (upscaling for instance), we recommend to set this to
+               False since you will need to a large memory.
+               In this case, the validation will be slow (you can increase
+               the number of workers if you use a batch
+               size of 1).
+        :param transform_img: a composition of transforms that performs over
+               images: torchvision.transforms.Compose().  or None.
+        :param resize: int, or sequence of two int (w, h), or None.
+               The size to which the original image is resized.
+               If None, the original image is used. (needed only when data
+               is a list).
+        :param crop_size: tuple of int (h, w). Size of the cropped patches.
+               If None, no cropping is done, and the entire image is used (
+               such the case in validation).
+        :param padding_size: (h%, w%), how much to pad (top/bottom) and
+               (left/right) of the ORIGINAL IMAGE. h, w are percentages. Or
+               None.
         :param padding_mode: str, accepted padding mode (
-        https://pytorch.org/docs/stable/torchvision/transforms.html#torchvision.transforms.functional.pad)
-        :param force_div_32 [used only during evaluation time): bool. If True, the evaluation image is padded in way
-        to have a size (h, w) that are both dividable by 32 (so the up-scaled mask matches the image).
-        :param up_scale_small_dim_to: int or None. If not None, we upscale the small dimension (height or width) to this
-        value (then compute the upscale ration r). Then, upscale the other dimension to a proportional value (using
-        the ratio r). This is helpful when the images have small size such as in the dataset
-        Caltech-UCSD-Birds-200-2011. Due to the depth, small images may 'disappear' or provide a very small attention
-        map.
-        :param do_not_save_samples: Bool. If True, we do not save samples in memory.The default
-        behavior of the code is to preload the samples, and save them in memory to speedup access and to avoid disc
-        access. However, this may be impractical when dealing with large dataset during the final processing (
-        evaluation). It is not necessary to keep the samples of the dataset in the memory once they are processed.
-        Consequences to this boolean flag: If it is True, we do not preload sample (read from disc), AND once a
-        sample is loaded, it is not stored. There few things that we save:
-        1. The size of the sample (h, w).in self.original_images_size.
-        We remind that this flag is useful only at the end of the training when you want to evaluate on a set
-        (train, valid, test). In this case, there is no need to store anything. If the dataset is large,
-        this will cause memory overflow (in case you run your code on a server with reserved amount of memory).
-        If you set this flag to True, use 0 workers for the dataloader, since we will be processing the samples
-        sequentially, and we want to avoid to load a sample ahead (no point of doing that).
+               https://pytorch.org/docs/stable/torchvision/transforms.html
+               #torchvision.transforms.functional.pad)
+        :param force_div_32 [used only during evaluation time): bool.
+               If True, the evaluation image is padded in way to have a size
+               (h, w) that are both dividable by 32 (so the up-scaled mask
+               matches the image).
+        :param up_scale_small_dim_to: int or None. If not None,
+               we upscale the small dimension (height or width) to this
+               value (then compute the upscale ration r). Then, upscale the
+               other dimension to a proportional value (using
+               the ratio r). This is helpful when the images have small size
+               such as in the dataset
+               Caltech-UCSD-Birds-200-2011. Due to the depth, small images may
+               'disappear' or provide a very small attention map.
+        :param do_not_save_samples: Bool. If True, we do not save samples in
+               memory.The default behavior of the code is to preload the
+               samples, and save them in memory to speedup access and to
+               avoid disc access. However, this may be impractical when
+               dealing with large dataset during the final processing (
+               evaluation). It is not necessary to keep the samples of the
+               dataset in the memory once they are processed.
+               Consequences to this boolean flag: If it is True, we do not
+               preload sample (read from disc), AND once a
+               sample is loaded, it is not stored. There few things that we
+               save: 1. The size of the sample (h, w).in
+               self.original_images_size.
+               We remind that this flag is useful only at the end of the
+               training when you want to evaluate on a set
+               (train, valid, test). In this case, there is no need to store
+               anything. If the dataset is large,
+               this will cause memory overflow (in case you run your code on a
+               server with reserved amount of memory).
+               If you set this flag to True, use 0 workers for the dataloader,
+               since we will be processing the samples
+               sequentially, and we want to avoid to load a sample ahead (no
+               point of doing that).
         """
 
         if set_for_eval:
-            assert force_div_32, "You asked to set this dataset for evaluation, but you didn't ask to force to pad " \
-                                 "the evaluation image to be dividable by 32. Please set 'force_div_32' to True ... [" \
-                                 "NOT OK]"
+            assert force_div_32, "You asked to set this dataset for " \
+                                 "evaluation, but you didn't ask to force " \
+                                 "to pad the evaluation image to be " \
+                                 "dividable by 32. Please set 'force_div_32' " \
+                                 "to True ... [NOT OK]"
         else:
             if force_div_32:
                 warnings.warn("You asked to force the image to be div.by 32 while set_for_eval=False (probably during "

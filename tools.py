@@ -27,6 +27,7 @@ from multiprocessing import Process, Lock
 from io import BytesIO
 import zipfile
 from collections import OrderedDict
+import subprocess
 
 import torch
 
@@ -187,15 +188,23 @@ def count_nb_params(model):
 
 
 class VisualiseMIL(object):
-    def __init__(self, alpha=128, floating=3, height_tag=60, bins=100, rangeh=(0, 1),
-                 color_map=mlp.cm.get_cmap("seismic"), height_tag_paper=130):
+    def __init__(self,
+                 alpha=128,
+                 floating=3,
+                 height_tag=60,
+                 bins=100,
+                 rangeh=(0, 1),
+                 color_map=mlp.cm.get_cmap("seismic"),
+                 height_tag_paper=130
+                 ):
         """
         A visualisation tool for MIL predictions.
 
         :param alpha: the transparency value for the overlapped image.
         :param floating: int, number of decimals to display.
         :param height_tag: int, the height of the tag banner.
-        :param bins: int, number of bins. Used when one wants to plot the distribution of the scores.
+        :param bins: int, number of bins. Used when one wants to plot the
+        distribution of the scores.
         :param rangeh: tuple, default range of the x-axis for the histograms.
         :param color_map: type of the color map to use.
         """
@@ -211,18 +220,26 @@ class VisualiseMIL(object):
         self.prec = "%." + str(floating) + "f"
         self.height_tag = height_tag
         self.height_tag_paper = height_tag_paper  # for the paper.
-        self.y = int(self.height_tag / 4)  # y position of the text inside the tag. (first line)
-        self.y2 = self.y * 2  # y position of the text inside the tag. (second line)
-        self.y3 = self.y * 3  # y position of the text inside the tag. (3rd line)
-        self.dx = 10  # how much space to put between LABELS (not word) inside the tag.
+        self.y = int(self.height_tag / 4)  # y position of the text inside the
+        # tag. (first line)
+        self.y2 = self.y * 2  # y position of the text inside the tag.
+        # (second line)
+        self.y3 = self.y * 3  # y position of the text inside the tag.
+        # (3rd line)
+        self.dx = 10  # how much space to put between LABELS (not word)
+        # inside the tag.
         self.space = 10  # (pixels) how much space to leave between images.
 
         # Fonts:
-        self.font_regular = ImageFont.truetype("./fonts/Inconsolata/Inconsolata-Regular.ttf", size=15)
-        self.font_bold = ImageFont.truetype("./fonts/Inconsolata/Inconsolata-Bold.ttf", size=15)
+        self.font_regular = ImageFont.truetype(
+            "./fonts/Inconsolata/Inconsolata-Regular.ttf", size=15)
+        self.font_bold = ImageFont.truetype(
+            "./fonts/Inconsolata/Inconsolata-Bold.ttf", size=15)
 
-        self.font_bold_paper = ImageFont.truetype("./fonts/Inconsolata/Inconsolata-Bold.ttf", size=120)
-        self.font_bold_paper_small = ImageFont.truetype("./fonts/Inconsolata/Inconsolata-Bold.ttf", size=50)
+        self.font_bold_paper = ImageFont.truetype(
+            "./fonts/Inconsolata/Inconsolata-Bold.ttf", size=120)
+        self.font_bold_paper_small = ImageFont.truetype(
+            "./fonts/Inconsolata/Inconsolata-Bold.ttf", size=80)
 
         # Colors:
         self.white = "rgb(255, 255, 255)"
@@ -237,25 +254,36 @@ class VisualiseMIL(object):
         self.h = None
         self.w = None
 
-    def convert_mask_into_heatmap(self, input_img, mask, binarize=False):
+    def convert_mask_into_heatmap(self,
+                                  input_img,
+                                  mask,
+                                  binarize=False
+                                  ):
         """
         Convert a mask into a heatmap.
 
         :param input_img: PIL.Image.Image of type float32. The input image.
         :param mask: 2D numpy.ndarray (binary or continuous in [0, 1]).
-        :param binarize: bool. If True, the mask is binarized by thresholding (values >=0.5 will be set to 1. ELse, 0).
+        :param binarize: bool. If True, the mask is binarized by thresholding
+        (values >=0.5 will be set to 1. ELse, 0).
         :return:
         """
         if binarize:
             mask = ((mask >= 0.5) * 1.).astype(np.float32)
 
-        img_arr = self.color_map((mask * 255).astype(np.uint8))  # --> in [0, 1.], (h, w, 4)
+        img_arr = self.color_map((mask * 255).astype(np.uint8))  #
+        # --> in [0, 1.], (h, w, 4)
 
-        return self.superpose_two_images_using_alpha(input_img.copy(), Image.fromarray(np.uint8(img_arr * 255)),
-                                                     self.alpha)
+        return self.superpose_two_images_using_alpha(
+            input_img.copy(),
+            Image.fromarray(np.uint8(img_arr * 255)),
+            self.alpha)
 
     @staticmethod
-    def superpose_two_images_using_alpha(back, forg, alpha):
+    def superpose_two_images_using_alpha(back,
+                                         forg,
+                                         alpha
+                                         ):
         """
         Superpose two PIL.Image.Image uint8 images.
         images must have the same size.
@@ -266,14 +294,22 @@ class VisualiseMIL(object):
         :return:R PIL.Image.Image RGB uint8 image.
         """
         # adjust the alpha
-        forg.putalpha(alpha)  # https://pillow.readthedocs.io/en/3.1.x/reference/Image.html#PIL.Image.Image.putalpha
+        forg.putalpha(alpha)  # https://pillow.readthedocs.io/en/3.1.x/
+        # reference/Image.html#PIL.Image.Image.putalpha
         # back.putalpha(int(alpha/4))
         back.paste(forg, (0, 0), forg)
 
         return back
 
     @staticmethod
-    def drawonit(draw, x, y, label, fill, font, dx):
+    def drawonit(draw,
+                 x,
+                 y,
+                 label,
+                 fill,
+                 font,
+                 dx
+                 ):
         """
         Draw text on an ImageDraw.new() object.
 
@@ -283,7 +319,8 @@ class VisualiseMIL(object):
         :param label: str, text message to draw.
         :param fill: color to use.
         :param font: font to use.
-        :param dx: int, how much space to use between LABELS (not word). Useful to compute the position of the next
+        :param dx: int, how much space to use between LABELS (not word).
+        Useful to compute the position of the next
         LABEL. (future)
         :return:
             . ImageDraw object with the text drawn on it as requested.
@@ -294,9 +331,15 @@ class VisualiseMIL(object):
 
         return draw, x
 
-    def create_tag_input(self, him, wim, label, name):
+    def create_tag_input(self,
+                         him,
+                         wim,
+                         label,
+                         name
+                         ):
         """
-        Create a PIL.Image.Image of RGB uint8 type. Then, writes a message over it.
+        Create a PIL.Image.Image of RGB uint8 type. Then, writes a message
+        over it.
 
         Dedicated to the input image.
 
@@ -315,27 +358,58 @@ class VisualiseMIL(object):
         draw = ImageDraw.Draw(img_tag)
 
         x = self.left_margin
-        draw, x = self.drawonit(draw, x, self.y, "In.cl.:", self.white, self.font_regular, self.dx)
-        draw, x = self.drawonit(draw, x, self.y, label, self.white, self.font_bold, self.dx)
+        draw, x = self.drawonit(draw,
+                                x,
+                                self.y,
+                                "In.cl.:",
+                                self.white,
+                                self.font_regular,
+                                self.dx
+                                )
+        draw, x = self.drawonit(draw,
+                                x,
+                                self.y,
+                                label,
+                                self.white,
+                                self.font_bold,
+                                self.dx
+                                )
 
         x = self.left_margin
         msg = "(h){}pix.x(w){}pix.".format(him, wim)
-        self.drawonit(draw, x, self.y2, msg, self.white, self.font_bold, self.dx)
+        self.drawonit(draw,
+                      x,
+                      self.y2,
+                      msg,
+                      self.white,
+                      self.font_bold,
+                      self.dx
+                      )
 
         return img_tag
 
-    def create_tag_pred_mask(self, wim, label, probability, status, f1pos, f1neg):
+    def create_tag_pred_mask(self,
+                             wim,
+                             label,
+                             probability,
+                             status,
+                             f1pos,
+                             f1neg
+                             ):
         """
-        Create a PIL.Image.Image of RGB uint8 type. Then, writes a message over it.
+        Create a PIL.Image.Image of RGB uint8 type. Then, writes a message
+        over it.
 
         Dedicated to the predicted map.
 
         Written message:
-        "Class: label  probability % [correct or wrong] (h) him pix. x (w) wim pix. #Patches = "
+        "Class: label  probability % [correct or wrong] (h) him pix. x (w) wim
+        pix. #Patches = "
         :param wim: int, width of the image.
         :param label: str, the class name.
         :param probability: float, the probability of the prediction.
-        :param status: str, the status of the prediction: "correct", "wrong", None. If None, no display of the status.
+        :param status: str, the status of the prediction: "correct", "wrong",
+        None. If None, no display of the status.
         :param dice: float or None, Dice index. (if possible)
         :return:
         """
@@ -344,13 +418,34 @@ class VisualiseMIL(object):
         draw = ImageDraw.Draw(img_tag)
         x = self.left_margin
 
-        draw, x = self.drawonit(draw, x, self.y, "Pred.cl.:", self.white, self.font_regular, self.dx)
-        draw, x = self.drawonit(draw, x, self.y, label, self.white, self.font_bold, self.dx)
+        draw, x = self.drawonit(draw,
+                                x,
+                                self.y,
+                                "Pred.cl.:",
+                                self.white,
+                                self.font_regular,
+                                self.dx
+                                )
+        draw, x = self.drawonit(draw,
+                                x,
+                                self.y,
+                                label,
+                                self.white,
+                                self.font_bold,
+                                self.dx
+                                )
 
         # Jump to the second line (helpful when the name of the class is long).
         x = self.left_margin
-        draw, x = self.drawonit(draw, x, self.y2, "Prob.: {}%".format(str(self.prec % (probability * 100))),
-                                self.white, self.font_regular, self.dx)
+        draw, x = self.drawonit(draw,
+                                x,
+                                self.y2,
+                                "Prob.: {}%".format(
+                                    str(self.prec % (probability * 100))),
+                                self.white,
+                                self.font_regular,
+                                self.dx
+                                )
 
         if status == "correct":
             color = self.green
@@ -360,30 +455,70 @@ class VisualiseMIL(object):
             color = self.orange
             status = "predicted"
         else:
-            raise ValueError("Unsupported status `{}` .... [NOT OK]".format(status))
+            raise ValueError("Unsupported status `{}` .... "
+                             "[NOT OK]".format(status))
 
-        draw, x = self.drawonit(draw, x, self.y2, "Status: [", self.white, self.font_regular, 0)
-        draw, x = self.drawonit(draw, x, self.y2, "{}".format(status), color, self.font_bold, 0)
-        self.drawonit(draw, x, self.y2, "]", self.white, self.font_regular, self.dx)
+        draw, x = self.drawonit(draw,
+                                x,
+                                self.y2,
+                                "Status: [",
+                                self.white,
+                                self.font_regular,
+                                0
+                                )
+        draw, x = self.drawonit(draw,
+                                x,
+                                self.y2,
+                                "{}".format(status),
+                                color,
+                                self.font_bold,
+                                0
+                                )
+        self.drawonit(draw,
+                      x,
+                      self.y2,
+                      "]",
+                      self.white,
+                      self.font_regular,
+                      self.dx
+                      )
 
         x = self.left_margin
-        f1posstr = "None" if status is None else str(self.prec % (f1pos * 100)) + "%"
-        f1negstr = "None" if status is None else str(self.prec % (f1neg * 100)) + "%"
-        draw, x = self.drawonit(draw, x, self.y3, "F1+: {}".format(f1posstr), self.white, self.font_regular, self.dx)
-        draw, x = self.drawonit(draw, x, self.y3, "F1-: {}".format(f1negstr), self.white, self.font_regular, self.dx)
+        f1posstr = "None" if status is None else str(
+            self.prec % (f1pos * 100.)) + "%"
+        f1negstr = "None" if status is None else str(
+            self.prec % (f1neg * 100.)) + "%"
+        draw, x = self.drawonit(draw,
+                                x,
+                                self.y3,
+                                "F1+: {}".format(f1posstr),
+                                self.white,
+                                self.font_regular,
+                                self.dx
+                                )
+        draw, x = self.drawonit(draw,
+                                x,
+                                self.y3,
+                                "F1-: {}".format(f1negstr),
+                                self.white,
+                                self.font_regular,
+                                self.dx
+                                )
 
         return img_tag
 
     def create_tag_true_mask(self, wim, status):
         """
-        Create a PIL.Image.Image of RGB uint8 type. Then, writes a message over it.
+        Create a PIL.Image.Image of RGB uint8 type. Then, writes a message
+        over it.
 
         Dedicated to the true mask.
 
         Written message:
         "True mask: [known or unknown]"
         :param wim: int, width of the image.
-        :param status: str, the status of the prediction: "correct", "wrong", None. If None, no display of the status.
+        :param status: str, the status of the prediction: "correct", "wrong",
+        None. If None, no display of the status.
         :return: PIL.Image.Image.
         """
         img_tag = Image.new("RGB", (wim, self.height_tag), "black")
@@ -391,23 +526,53 @@ class VisualiseMIL(object):
         draw = ImageDraw.Draw(img_tag)
         x = self.left_margin
 
-        draw, x = self.drawonit(draw, x, self.y, "True mask:", self.white, self.font_regular, self.dx)
-        draw, x = self.drawonit(draw, x, self.y, "[", self.white, self.font_regular, 0)
-        draw, x = self.drawonit(draw, x, self.y, status, self.green, self.font_bold, 0)
-        draw, x = self.drawonit(draw, x, self.y, "]", self.white, self.font_regular, self.dx)
+        draw, x = self.drawonit(draw,
+                                x,
+                                self.y,
+                                "True mask:",
+                                self.white,
+                                self.font_regular,
+                                self.dx
+                                )
+        draw, x = self.drawonit(draw,
+                                x,
+                                self.y,
+                                "[",
+                                self.white,
+                                self.font_regular,
+                                0
+                                )
+        draw, x = self.drawonit(draw,
+                                x,
+                                self.y,
+                                status,
+                                self.green,
+                                self.font_bold,
+                                0
+                                )
+        draw, x = self.drawonit(draw,
+                                x,
+                                self.y,
+                                "]",
+                                self.white,
+                                self.font_regular,
+                                self.dx
+                                )
 
         return img_tag
 
     def create_tag_heatmap_pred_mask(self, wim, iter):
         """
-        Create a PIL.Image.Image of RGB uint8 type. Then, writes a message over it.
+        Create a PIL.Image.Image of RGB uint8 type. Then, writes a message
+        over it.
 
         Dedicated to the predicted mask.
 
         Written message:
         "Heatmap pred. mask.       [iter.?/Final]"
         :param wim: int, width of the image.
-        :param iter: str, the number of iteration when this mask was draw. "final" to indicate that this is final
+        :param iter: str, the number of iteration when this mask was draw.
+        "final" to indicate that this is final
         prediction.
         :return: PIL.Image.Image.
         """
@@ -416,10 +581,38 @@ class VisualiseMIL(object):
         draw = ImageDraw.Draw(img_tag)
         x = self.left_margin
 
-        draw, x = self.drawonit(draw, x, self.y, "Heatmap ped.mask.", self.white, self.font_regular, self.dx)
-        draw, x = self.drawonit(draw, x, self.y, "[", self.white, self.font_regular, 0)
-        draw, x = self.drawonit(draw, x, self.y, "iter.{}".format(iter), self.green, self.font_bold, 0)
-        self.drawonit(draw, x, self.y, "]", self.white, self.font_regular, 0)
+        draw, x = self.drawonit(draw,
+                                x,
+                                self.y,
+                                "Heatmap ped.mask.",
+                                self.white,
+                                self.font_regular,
+                                self.dx
+                                )
+        draw, x = self.drawonit(draw,
+                                x,
+                                self.y,
+                                "[",
+                                self.white,
+                                self.font_regular,
+                                0
+                                )
+        draw, x = self.drawonit(draw,
+                                x,
+                                self.y,
+                                "iter.{}".format(iter),
+                                self.green,
+                                self.font_bold,
+                                0
+                                )
+        self.drawonit(draw,
+                      x,
+                      self.y,
+                      "]",
+                      self.white,
+                      self.font_regular,
+                      0
+                      )
 
         return img_tag
 
@@ -431,26 +624,37 @@ class VisualiseMIL(object):
         :param i: int or None, the class ID. None if unknown label.
         :return: str, the class name.
         """
-        assert isinstance(i, int) or i is None, "'i' must be an integer. Provided: {}, {}".format(i, type(i))
-        error_msg = "class ID `{}` does not exist within possible IDs `{}` .... [NOT OK]".format(
-            i, list(name_classes.values()))
-        assert (i in list(name_classes.values())) or (i is None), error_msg
+        msg = "'i' must be an integer. Provided: {}, {}".format(i, type(i))
+        assert isinstance(i, int) or i is None, msg
+        msg = "class ID `{}` does not exist within possible IDs `{}` " \
+              ".... [NOT OK]".format(i, list(name_classes.values()))
+        assert (i in list(name_classes.values())) or (i is None), msg
 
         if i is not None:
-            return list(name_classes.keys())[list(name_classes.values()).index(i)]
+            return list(name_classes.keys())[
+                list(name_classes.values()).index(i)]
         else:
             return "Unknown"
 
-    def convert_array_into_hist_PIL_img_do_roc(self, mask, bins, rangeh, true_mask):
+    def convert_array_into_hist_PIL_img_do_roc(self,
+                                               mask,
+                                               bins,
+                                               rangeh,
+                                               true_mask
+                                               ):
         """
         Compute:
-        1. The histogram of a numpy array and plot it, then, convert it into a PIL.Image.Image image.
-        2. Compute ROC curve (and the area under it), and plot it, then convert it into  aPIL.Image.Image.
+        1. The histogram of a numpy array and plot it, then, convert it
+        into a PIL.Image.Image image.
+        2. Compute ROC curve (and the area under it), and plot it, then convert
+        it into  aPIL.Image.Image.
 
-        :param mask: numpy.ndarray, 2D matrix containing the predicted mask (continous).
+        :param mask: numpy.ndarray, 2D matrix containing the predicted mask
+         (continous).
         :param bins: int, number of bins in the histogram.
         :param rangeh: tuple, range of the histogram.
-        :param true_mask: numpy.ndarray, 2D matri containing the true mask (binary) where 1 indicates the glands.
+        :param true_mask: numpy.ndarray, 2D matri containing the true mask
+        (binary) where 1 indicates the glands.
         :return: PIL.Image.Image uint8 RGB image.
         """
         floating = 4
@@ -462,37 +666,48 @@ class VisualiseMIL(object):
         # Histogram.
         fig.add_subplot(221)
 
-        plt.hist(mask.ravel(), bins=bins, weights=np.ones_like(mask.ravel()) / float(mask.size), range=rangeh)
+        plt.hist(mask.ravel(),
+                 bins=bins,
+                 weights=np.ones_like(mask.ravel()) / float(mask.size),
+                 range=rangeh
+                 )
         plt.xlabel("x: mask values")
         plt.ylabel("y: P(x0 <= x <= x1)")
 
         # ROC
         fig.add_subplot(222)
 
-        tpr, fpr, roc_auc = compute_roc_curve_once(true_mask.ravel(), mask.ravel().astype(np.float32))
-        plt.plot(fpr, tpr, color='darkorange', lw=lw, label='ROC(AUC: {})'.format(prec % roc_auc))
+        tpr, fpr, roc_auc = compute_roc_curve_once(
+            true_mask.ravel(),
+            mask.ravel().astype(np.float32)
+        )
+        plt.plot(fpr, tpr, color='darkorange', lw=lw,
+                 label='ROC(AUC: {})'.format(prec % roc_auc))
         plt.plot([0, 1], [0, 1], color='navy', lw=lw, linestyle='--')
         plt.xlim([0.0, 1.0])
         plt.ylim([0.0, 1.05])
         plt.xlabel('False Positive Rate')
         plt.ylabel('True Positive Rate')
         plt.title('ROC. AUC: {}'.format(prec % roc_auc))
-        plt.legend(loc='lower right', fancybox=True, shadow=True, prop={'size': font_sz})
+        plt.legend(loc='lower right', fancybox=True, shadow=True,
+                   prop={'size': font_sz})
         plt.tight_layout()
 
         # Precision-recall
         fig.add_subplot(223)
 
-        precision, recall, p_r_auc = compute_precision_recall_curve_once(true_mask.ravel(), mask.ravel().astype(
-            np.float32))
-        plt.plot(recall, precision, color='darkorange', lw=lw, label='Precision-recall(AUC: {})'.format(prec % p_r_auc))
+        precision, recall, p_r_auc = compute_precision_recall_curve_once(
+            true_mask.ravel(), mask.ravel().astype(np.float32))
+        plt.plot(recall, precision, color='darkorange', lw=lw,
+                 label='Precision-recall(AUC: {})'.format(prec % p_r_auc))
         plt.plot([0, 1], [0.5, 0.5], color='navy', lw=lw, linestyle='--')
         plt.xlim([0.0, 1.0])
         plt.ylim([0.0, 1.05])
         plt.xlabel('Recall')
         plt.ylabel('Precision')
         plt.title('Precision-recall. AUC: {}'.format(prec % p_r_auc))
-        plt.legend(loc='lower right', fancybox=True, shadow=True, prop={'size': font_sz})
+        plt.legend(loc='lower right', fancybox=True, shadow=True,
+                   prop={'size': font_sz})
         plt.tight_layout()
 
         fig.canvas.draw()
@@ -509,19 +724,28 @@ class VisualiseMIL(object):
     def create_hists(self, mask, bins, rangeh, k, true_mask):
         """
         Creates:
-         1. Histogram of the heatmap of the predicted mask. [it is positioned at the end of the entire image)
+         1. Histogram of the heatmap of the predicted mask.
+         [it is positioned at the end of the entire image)
          2. Plots the ROC curve and computes the area under it.
 
-        :param mask: numpy.ndarray float32 2D matrix of size (h, w). The mask (non-binarized).
+        :param mask: numpy.ndarray float32 2D matrix of size (h, w).
+        The mask (non-binarized).
         :param bins: int, number of bins in the histogram.
         :param rangeh: tuple, range of the histogram.
-        :param k: int, number of the images that will be plotted in the final image.
-        :param true_mask: numpy.ndarray float 2D matrix of size (h, w). The true mask (binary) where 1 indicates the
+        :param k: int, number of the images that will be plotted in the final
+        image.
+        :param true_mask: numpy.ndarray float 2D matrix of size (h, w). The
+        true mask (binary) where 1 indicates the
         glands.
-        :return: PIL.Image.Image RGB, uint8 image. an image where all the images are left zero except the image
+        :return: PIL.Image.Image RGB, uint8 image. an image where all the
+        images are left zero except the image
         corresponding to the heatmap of the mask where we plot its histogram.
         """
-        img_hist = self.convert_array_into_hist_PIL_img_do_roc(mask, bins, rangeh, true_mask)
+        img_hist = self.convert_array_into_hist_PIL_img_do_roc(mask,
+                                                               bins,
+                                                               rangeh,
+                                                               true_mask
+                                                               )
         w_his, h_his = img_hist.size
 
         h, w = mask.shape
@@ -533,88 +757,165 @@ class VisualiseMIL(object):
 
         return img_out
 
-    def __call__(self, input_img, probab, pred_label, pred_mask, f1pos, f1neg, name_classes, iter,
-                 use_tags=True, label=None, mask=None, show_hists=True, bins=None, rangeh=None, name_file=""):
+    def __call__(self,
+                 input_img,
+                 probab,
+                 pred_label,
+                 pred_mask,
+                 f1pos,
+                 f1neg,
+                 name_classes,
+                 iter,
+                 pred_mask_bin=None,
+                 use_tags=True,
+                 label=None,
+                 mask=None,
+                 show_hists=True,
+                 bins=None,
+                 rangeh=None,
+                 name_file=""
+                 ):
         """
         Visualise MIL prediction.
 
         :param input_img: PIL.Image.Image RGB uint8 image. of size (h, w).
         :param probab: float, the probability of the predicted class.
-        :param pred_label: int, the ID of the predicted class. We allow the user to provide the prediction.
+        :param pred_label: int, the ID of the predicted class. We allow the
+        user to provide the prediction.
         Generally, it can be inferred from the scores.
-        :param pred_mask: numpy.ndarray, 2D float matrix of size (h, w). The predicted mask.
+        :param pred_mask: numpy.ndarray, 2D float matrix of size (h, w). The
+        predicted mask.
         :param f1pos: float [0, 1]. Dice index over the positive regions.
         :param f1neg: float [0, 1]. Dice index over the negative regions.
         :param name_classes: dict, {"class_name": int}.
-        :param iter: str, indicates the iteration when this call happens. "Final" to indicate this is the final
-        prediction.
-        :param use_tags: True/False, if True, additional information will be allowed to be displayed.
-        :param label: int or None, the the ID of the true class of the input_image. None: if the true label is unknown.
-        :param mask: numpy.ndarray or None, 2D float matrix of size (h, w). The true mask. None if the true mask is
+        :param iter: str, indicates the iteration when this call happens.
+        "Final" to indicate this is the final prediction.
+        :param pred_mask_bin: same as pred_mask but binary if available.
+        :param use_tags: True/False, if True, additional information will be
+        allowed to be displayed.
+        :param label: int or None, the the ID of the true class of the
+        input_image. None: if the true label is unknown.
+        :param mask: numpy.ndarray or None, 2D float matrix of size (h, w).
+        The true mask. None if the true mask is
         unknown.
-        :param show_hists: True/False. If True, a histogram of the scores in each map will be displayed.
-        :param bins: int, number of bins in the histogram. If None, self.bins will be used.
-        :param rangeh: tuple, range of the histogram. If None, self.rangeh will be used.
+        :param show_hists: True/False. If True, a histogram of the scores in
+        each map will be displayed.
+        :param bins: int, number of bins in the histogram. If None, self.bins
+        will be used.
+        :param rangeh: tuple, range of the histogram. If None, self.rangeh will
+        be used.
         :param name_file: str, name of the input image file.
         :return: PIL.Image.Image RGB uint8 image.
         """
-        assert isinstance(input_img, Image.Image), "'input_image' type must be `{}`, but we found `{}` .... [NOT OK]" \
-                                                   "".format(Image.Image, type(input_img))
-        assert isinstance(probab, float), "'probab' must of type `{}` but we found `{}` .... [NOT OK]".format(
-            float, type(probab))
-        assert isinstance(pred_label, int), "'pred_label' must be of type `{}` but we found `{}` .... [NOT " \
-                                            "OK]".format(int, type(pred_label))
-        assert (isinstance(label, int) or label is None), "'label' must be `{}` or None. We found `{}` .... [NOT " \
-                                                          "OK]".format(int, type(label))
-        assert isinstance(pred_mask, np.ndarray), "'pred_mask' must be `{}`, but we found `{}` .... [NOT OK]".format(
-            np.ndarray, type(mask))
-        assert isinstance(mask, np.ndarray) or mask is None, "'mask' must be `{}` or None, but we found `{}` .... [" \
-                                                             "NOT OK]".format(np.ndarray, type(mask))
-        assert isinstance(name_classes, dict), "'name_classes' must be of type `{}`, but we found `{}` .... [NOT " \
-                                               "OK]".format(dict, type(name_classes))
+        msg = "'input_image' type must be `{}`, but we found `{}` " \
+              "".format(Image.Image, type(input_img))
+        assert isinstance(input_img, Image.Image), msg
 
-        assert isinstance(use_tags, bool), "'use_tags' must be of type `{}`, but we found `{}` .... [NOT OK]".format(
+        msg = "'probab' must of type `{}` but we found `{}` ".format(
+            float, type(probab))
+        assert isinstance(probab, float), msg
+
+        msg = "'pred_label' must be of type `{}` but we found `{}` .... [NOT " \
+                                            "OK]".format(int, type(pred_label))
+        assert isinstance(pred_label, int), msg
+        msg = "'label' must be `{}` or None. We found `{}` ".format(
+            int, type(label))
+        assert (isinstance(label, int) or label is None), msg
+        msg = "'pred_mask' must be `{}`, but we found `{}` ".format(
+            np.ndarray, type(mask))
+        assert isinstance(pred_mask, np.ndarray), msg
+
+        msg = "'mask' must be `{}` or None, but we found `{}`".format(
+            np.ndarray, type(mask))
+        assert isinstance(mask, np.ndarray) or mask is None, msg
+
+        msg = "'name_classes' must be of type `{}`, but we found `{}` " \
+              "".format(dict, type(name_classes))
+        assert isinstance(name_classes, dict), msg
+
+        msg = "'use_tags' must be of type `{}`, but we found `{}` ".format(
             bool, type(use_tags))
+        assert isinstance(use_tags, bool), msg
 
         wim, him = input_img.size
-        assert wim == pred_mask.shape[1] and him == pred_mask.shape[0], "predicted mask {} and image shape ({}, " \
-                                                                        "{}) do not " \
-                                                                        "match .... [NOT OK]".format(
-            pred_mask.shape, him, wim)
+        msg = "predicted mask {} and image shape ({}, {}) do not match " \
+              "".format(pred_mask.shape, him, wim)
+        assert wim == pred_mask.shape[1] and him == pred_mask.shape[0], msg
+
         # convert masks into images.
         if mask is None:
             true_mask = np.zero((him, wim), dtype=np.float32)
         else:
             true_mask = mask
 
-        mask_img = self.convert_mask_into_heatmap(input_img, true_mask, binarize=False)
+        mask_img = self.convert_mask_into_heatmap(input_img,
+                                                  true_mask,
+                                                  binarize=False
+                                                  )
 
-        pred_mask_img = self.convert_mask_into_heatmap(input_img, pred_mask, binarize=False)
-        pred_mask_bin_img = self.convert_mask_into_heatmap(input_img, pred_mask, binarize=True)
+        pred_mask_img = self.convert_mask_into_heatmap(input_img,
+                                                       pred_mask,
+                                                       binarize=False
+                                                       )
+        pred_mask_bin_img = self.convert_mask_into_heatmap(
+            input_img,
+            pred_mask if pred_mask_bin is None else pred_mask_bin,
+            binarize=True if pred_mask_bin is None else False
+        )
 
         # create tags
         if use_tags:
-            input_tag = self.create_tag_input(him, wim, self.get_class_name(name_classes, label), name_file)
-            true_mask_tag = self.create_tag_true_mask(wim, "unknown" if mask is None else "known")
+            input_tag = self.create_tag_input(him,
+                                              wim,
+                                              self.get_class_name(
+                                                  name_classes, label),
+                                              name_file
+                                              )
+            true_mask_tag = self.create_tag_true_mask(
+                wim,
+                "unknown" if mask is None else "known"
+            )
             class_name = self.get_class_name(name_classes, pred_label)
             if label is not None:
                 status = "correct" if label == pred_label else "wrong"
             else:
                 status = "unknown"
-            pred_mask_tag = self.create_tag_pred_mask(wim, class_name, probab, status, f1pos, f1neg)
+            pred_mask_tag = self.create_tag_pred_mask(wim,
+                                                      class_name,
+                                                      probab,
+                                                      status,
+                                                      f1pos,
+                                                      f1neg
+                                                      )
             heat_pred_mask_tag = self.create_tag_heatmap_pred_mask(wim, iter)
 
         # creates histograms
         nbr_imgs = 4
         if show_hists:
-            histogram = self.create_hists(pred_mask, bins, rangeh, nbr_imgs, true_mask)
+            histogram = self.create_hists(pred_mask,
+                                          bins,
+                                          rangeh,
+                                          nbr_imgs,
+                                          true_mask
+                                          )
 
-        img_out = Image.new("RGB", (wim * nbr_imgs + self.space * (nbr_imgs - 1), him))
+        img_out = Image.new("RGB",
+                            (wim * nbr_imgs + self.space * (nbr_imgs - 1), him)
+                            )
         if use_tags:
-            img_out = Image.new("RGB", (wim * nbr_imgs + self.space * (nbr_imgs - 1), him + self.height_tag))
+            img_out = Image.new("RGB",
+                                (wim * nbr_imgs + self.space * (nbr_imgs - 1),
+                                 him + self.height_tag)
+                                )
 
-        list_imgs = [input_img, mask_img, pred_mask_bin_img, pred_mask_img]
-        list_tags = [input_tag, true_mask_tag, pred_mask_tag, heat_pred_mask_tag]
+        list_imgs = [input_img,
+                     mask_img,
+                     pred_mask_bin_img,
+                     pred_mask_img]
+        list_tags = [input_tag,
+                     true_mask_tag,
+                     pred_mask_tag,
+                     heat_pred_mask_tag]
         for i, img in enumerate(list_imgs):
             img_out.paste(img, (i * (wim + self.space), 0), None)
             if use_tags:
@@ -727,8 +1028,20 @@ class VisualizePaper(VisualiseMIL):
 
         return img_tag
 
-    def __call__(self, name_classes, img, label, name_file, true_mask, per_method, methods, order_methods,
-                 show_heat_map=False, show_tags=False, show_tag_paper=False, use_small_font_paper=False):
+    def __call__(self,
+                 name_classes,
+                 img,
+                 label,
+                 name_file,
+                 true_mask,
+                 per_method,
+                 methods,
+                 order_methods,
+                 show_heat_map=False,
+                 show_tags=False,
+                 show_tag_paper=False,
+                 use_small_font_paper=False
+                 ):
         """
 
         :param img:
@@ -901,10 +1214,7 @@ def get_device(args):
         torch.device() object.
     """
     username = getpass.getuser()
-    warnings.warn("You are accessing an anonymized part of the code. We are going to exit. Come here and fix this "
-                  "according to your setup. Setup CUDA or CPU.")
-    sys.exit(0)
-    if username == "XXXXXXXXXXXXX":
+    if username == "sbelharbi":  # LIVIA
         device = torch.device("cuda:" + args.cudaid if torch.cuda.is_available() else "cpu")
     else:
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -1009,39 +1319,61 @@ def get_state_dict(model):
 def get_rootpath_2_dataset(args):
     """
     Returns the root path to the dataset depending on the server.
-    :param args: object. Contains the configuration of the exp that has been read from the yaml file.
-    :return: baseurl, a str. The root path to the dataset independently from the host.
+    :param args: object. Contains the configuration of the exp that has been
+    read from the yaml file.
+    :return: baseurl, a str. The root path to the dataset independently from
+    the host.
     """
     datasetname = args.dataset
-    username = getpass.getuser()
-    warnings.warn("You are accessing an anonymized part of the code. We are going to exit. Come here and fix this "
-                  "according to your setup. Setup the absolute path to the parent where all the datasets are located. All the dataset are expected to "
-                  "be located in one folder. We are asking to provide the absolute path to this folder.")
-    sys.exit(0)
-    baseurl= None
-    if username == 'XXXXXXXXXXXXX':
-        baseurl = "/XXXXXXXXXXXXXXX/XXXXXXXXXXXXX/XXXXXXXXXXXXXXXXX/datasets"
-    elif username == "XXXXXXXXXXXXXXXXXXXXX":  # XXXXXXXXXXXXXXX
-        baseurl = "/XXXXXXXXXXXXXXX/XXXXXXXXXXXXXXXX/XXXXXXXXXXXXXXX/workspace/datasets"
-    elif username == "XXXXXXXXXXXXXX":  # XXXXXXXXXXXXX
-        baseurl = "/XXXXXXXXXXXXXX/XXXXXXXXXXXXX/XXXXXXXXXXXXX/XXXXXXXXXXXXXXXX/datasets"
+    baseurl = None
+    if "HOST_XXX" in os.environ.keys():
+        if os.environ['HOST_XXX'] == 'laptop':
+            baseurl = "{}/datasets".format(os.environ["EXDRIVE"])
+        elif os.environ['HOST_XXX'] == 'lab':
+            baseurl = "{}/datasets".format(os.environ["NEWHOME"])
+    elif "CC_CLUSTER" in os.environ.keys():
+        if "SLURM_TMPDIR" in os.environ.keys():
+            # if we are running within a job use the node disc:  $SLURM_TMPDIR
+            baseurl = "{}/datasets".format(os.environ["SLURM_TMPDIR"])
+        else:
+            # if we are not running within a job, use the scratch.
+            # this cate my happen if someone calls this function outside a job.
+            baseurl = "{}/datasets".format(os.environ["SCRATCH"])
 
+    msg_unknown_host = "Sorry, it seems we are enable to recognize the " \
+                       "host. You seem to be new to this code. " \
+                       "So, we recommend you add your baseurl on your own."
     if baseurl is None:
-        raise ValueError("Sorry, it seems we are enable to recognize you. You seem to be new to this code. So, "
-                         "we recommend you add your baseurl on your own.")
+        raise ValueError(msg_unknown_host)
 
-    if datasetname == "bc18bch":
+    if datasetname == "bach-part-a-2018":
         baseurl = join(baseurl, "ICIAR-2018-BACH-Challenge")
-    elif datasetname == "glas":
-        baseurl = join(baseurl, "GlaS-2015/Warwick QU Dataset (Released 2016_07_08)")
+    elif datasetname == "fgnet":
+        baseurl = join(baseurl, "FGNET")
+    elif datasetname == "afad-lite":
+        baseurl = join(baseurl, "tarball-lite")
+    elif datasetname == "afad-full":
+        baseurl = join(baseurl, "tarball")
     elif datasetname == "Caltech-UCSD-Birds-200-2011":
         baseurl = join(baseurl, "Caltech-UCSD-Birds-200-2011")
     elif datasetname == 'Oxford-flowers-102':
         baseurl = join(baseurl, 'Oxford-flowers-102')
+    elif datasetname == 'historical-color-image-decade':
+        baseurl = join(baseurl, 'HistoricalColor-ECCV2012')
+    elif datasetname == 'cifar-10':
+        baseurl = join(baseurl, 'cifar-10')
+    elif datasetname == 'cifar-100':
+        baseurl = join(baseurl, 'cifar-100')
+    elif datasetname == 'svhn':
+        baseurl = join(baseurl, 'svhn')
+    elif datasetname == 'mnist':
+        baseurl = join(baseurl, 'mnist')
+    elif datasetname == "glas":
+        baseurl = join(baseurl,
+                       "GlaS-2015/Warwick QU Dataset (Released 2016_07_08)")
 
     if baseurl is None:
-        raise ValueError("Sorry, it seems we are enable to recognize you. You seem to be new to this code. So, "
-                         "we recommend you add your baseurl on your own.")
+        raise ValueError(msg_unknown_host)
 
     return baseurl
 
@@ -1214,7 +1546,7 @@ def final_processing(model, dataloader, dataset, dataset_name, test_fn, criterio
         true_labels = []
         # metrics_ = dict()
         rootpath = get_rootpath_2_dataset(args)
-        zipout = zipfile.ZipFile(join(OUTD, namex.lower(), "prediction.zip"), "w")
+        # zipout = zipfile.ZipFile(join(OUTD, namex.lower(), "prediction.zip"), "w")
 
         for i in tqdm.tqdm(range(n), ncols=80, total=n):
             img = datasetx.get_original_input_img(i)  # PIL.Image.Image uint8 RGB image.
@@ -1235,17 +1567,20 @@ def final_processing(model, dataloader, dataset, dataset_name, test_fn, criterio
                 rangeh=args.rangeh
             )
             name_file = datasetx.absolute_paths_imgs[i].split(os.sep)[-1].split(".")[0]  # e.g. 'train_13'
+
             # We use zip files to avoid overloading the disc with files. It is SLIGHTLY faster than writing files
             # in disc (mainly/probably due to compression).
             # Write in file-in-memory
-            fobj = BytesIO()  # this is a file object
-            img_visu.save(fobj, format=args.extension[1])  # save in file object in memory.
+            # fobj = BytesIO()  # this is a file object
+            # img_visu.save(fobj, format=args.extension[1])  # save in file
+            # object in memory.
             # compress it in memory in the zip file.
-            zipout.writestr(name_file + "." + args.extension[0], fobj.getvalue())
+            # zipout.writestr(name_file + "." + args.extension[0],
+            # fobj.getvalue())
             # run `unzip -o prediction.zip -d prediction` to decompress the file.
 
             # Expensive operation: DISC I/O.
-            # img_visu.save(join(outd_data, name_file + "." + args.extension[0]), args.extension[1], optimize=True)
+            img_visu.save(join(outd_data, name_file + "." + args.extension[0]), args.extension[1], optimize=True)
 
             # # Compute metrics sample per sample!!!
             # tmp = compute_metrics(true_labels=[label], pred_labels=[prediction], true_masks=[true_mask],
@@ -1273,7 +1608,13 @@ def final_processing(model, dataloader, dataset, dataset_name, test_fn, criterio
         # for key in metrics_.keys():
         #     metrics_[key] /= float(n)
 
-        zipout.close()
+        # zipout.close()
+        cmdx = ["cd {} ".format(join(OUTD, namex.lower())),
+                "tar -cf {}.tar.gz {} ".format("prediction", "prediction"),
+                # "rm -r {} ".format("prediction")
+                ]
+        cmdx = " && ".join(cmdx)
+        subprocess.run(cmdx, shell=True, check=True)
 
         if save_pred_for_later_comp:
             for_later = join(OUTD, namex.lower(), "stats_for_comp_{}.pkl".format(namex.lower()))
@@ -1400,6 +1741,29 @@ def final_processing(model, dataloader, dataset, dataset_name, test_fn, criterio
             yaml.dump(args, fx)
 
 
+def str2bool(v):
+    """
+    Read `v`: and returns a boolean value:
+    True: if `v== "True"`
+    False: if `v=="False"`
+    :param v: str.
+    :return: bool.
+    """
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, str):
+        if v == "True":
+            return True
+        elif v == "False":
+            return False
+        else:
+            raise ValueError(
+                "Expected value: 'True'/'False'. found {}.".format(v))
+    else:
+        raise argparse.ArgumentTypeError('String boolean value expected: '
+                                         '"True"/"Flse"')
+
+
 def get_yaml_args(input_args):
     """
     Gets the yaml arguments.
@@ -1417,77 +1781,149 @@ def get_yaml_args(input_args):
         args["cudaid"] = input_args.cudaid
         args["yaml"] = input_args.yaml
 
-        if args["show_hists"]:
-            warnings.warn("You asked to show hist. of mask prediction. We decided to turn it off to speed up.")
-            args["show_hists"] = False
-
-        if args["floating"] != 2:
-            warnings.warn("We set the floating point to 2 instead of {}. It takes too much horizontal space.".format(
-                args["floating"]))
-            args["floating"] = 2
 
         # Checking
         if args["dataset"] == "glas":
             # Not sure why I had two vars. with the same value. No time to fix this.
-            assert args["nbr_classes"] == 2, "glas dataset is expected to have 2 classes. You provided {}. Please " \
-                                             "double check. Exiting .... [NOT OK]".format(args["nbr_classes"])
-            assert args["model"]["num_classes"] == 2, "glas dataset is expected to have 2 classes. You provided {}. " \
-                                                      "Please " \
-                                                      "double check. Exiting .... [NOT OK]".format(
+            assert args["nbr_classes"] == 2, "glas has 2 classes. You " \
+                                             "provided {}. [NOT OK]".format(
+                args["nbr_classes"])
+            assert args["model"]["num_classes"] == 2, "glas  2 classes. " \
+                                                      "You provided {}. " \
+                                                      "[NOT OK]".format(
                 args["model"]["num_classes"])
         elif args["dataset"] == "Caltech-UCSD-Birds-200-2011":
-            assert args["nbr_classes"] in [200, 5], "Caltech-UCSD-Birds-200-2011 dataset is expected to have [200, " \
-                                                    "5] classes. You provided {}. Please " \
-                                                    "double check. Exiting .... [NOT OK]".format(args["nbr_classes"])
-            assert args["model"]["num_classes"] in [200, 5], "Caltech-UCSD-Birds-200-2011 dataset is expected to " \
-                                                             "have [200, 5] classes. You provided {}. Please " \
-                                                             "double check. Exiting .... [NOT OK]".format(
-                args["model"]["num_classes"])
+            msg = "'Caltech-UCSD-Birds-200-2011' has 200/5 classes. " \
+                  "found {}".format(args["nbr_classes"])
+            assert args["nbr_classes"] in [200, 5], msg
+            assert args["model"]["num_classes"] in [200, 5], msg
         elif args['dataset'] == 'Oxford-flowers-102':
-            assert args["nbr_classes"] == 102, 'Oxford-flowers-102 dataset is expected to have 102 classes; found' \
-                                               '{}. Exiting .... [NOT OK]'.format(args['nbr_classes'])
+            msg = "'Oxford-flowers-102' has 102 classes. " \
+                  "found {}".format(args['num_classes'])
+            assert args["nbr_classes"] == 102, msg
 
         # set the path to model parameters to load them.
         parser.add_argument("--path_pre_trained", type=str, default=None,
                             help="Absolute path to file containing parameters of a "
                                  "model. Use --strict to specify if the  pre-trained "
                                  "model needs to match exactly the current model or not.")
-        parser.add_argument("--strict", type=bool, default=None,
-                            help="If True, the pre-trained model needs to match exactly the current model. Default: "
+        parser.add_argument("--strict", type=str2bool, default=None,
+                            help="If True, the pre-trained model needs to "
+                                 "match exactly the current model. Default: "
                                  "True.")
         # Allow the user to override some values in the yaml.
-        # This helps changing the hyper-parameters using the command line without changing the yaml file (very
+        # This helps changing the hyper-parameters using the command line
+        # without changing the yaml file (very
         # helpful during debug!!!!).
         # Create a new parser.
-        parser.add_argument("--yaml", type=str, help="yaml file containing the configuration.")
+        parser.add_argument("--yaml", type=str,
+                            help="yaml file containing the configuration.")
         parser.add_argument("--cudaid", type=str, default="0", help="cuda id.")
 
-        parser.add_argument("--bsize", type=int, default=None, help="Training batch size (optimizer)")
-        parser.add_argument("--lr", type=float, default=None, help="Learning rate (optimizer)")
-        parser.add_argument("--momentum", type=float, default=None, help="Momentum (optimizer)")
-        parser.add_argument("--wdecay", type=float, default=None, help="Weight decay (optimizer)")
-        parser.add_argument("--stepsize", type=int, default=None, help="Step size for lr scheduler.")
-        parser.add_argument("--lam", type=float, default=None, help="Lambda (size constraint)")
-        parser.add_argument("--epoch", type=int, default=None, help="Max epoch")
+        parser.add_argument("--batch_size", type=int, default=None,
+                            help="Training batch size (optimizer)")
+        parser.add_argument("--lr", type=float, default=None,
+                            help="Learning rate (optimizer)")
+        parser.add_argument("--momentum", type=float, default=None,
+                            help="Momentum (optimizer)")
+        parser.add_argument("--weight_decay", type=float, default=None,
+                            help="Weight decay (optimizer)")
+        parser.add_argument("--step_size", type=int, default=None,
+                            help="Step size for lr scheduler.")
+        parser.add_argument("--max_epochs", type=int, default=None,
+                            help="Max epoch")
+        parser.add_argument("--name", type=str, default=None,
+                            help="Optimizer name.")
+        parser.add_argument("--valid_batch_size", type=str, default=None,
+                            help="Batch size for validation.")
+        parser.add_argument("--nesterov", type=str2bool, default=None,
+                            help="Whether or not to use nesterov.")
+        parser.add_argument("--lr_scheduler_name", type=str, default=None,
+                            help="Lr scheduler name.")
+        parser.add_argument("--use_lr_scheduler", type=str2bool, default=None,
+                            help="Whether or not use an lr scheduler.")
+        parser.add_argument("--gamma", type=float, default=None,
+                            help="gamma for mystep.")
+        parser.add_argument("--min_lr", type=float, default=None,
+                            help="min_lr for mystep.")
+
+        parser.add_argument("--crop_size", type=int, default=None,
+                            help="crop size.")
+        parser.add_argument("--up_scale_small_dim_to", type=int, default=None,
+                            help="dim to upscale the min to.")
+
 
         parser.add_argument("--fold", type=int, default=None, help="Fold")
         parser.add_argument("--split", type=int, default=None, help="Split")
 
-        parser.add_argument("--alpha", type=float, default=None, help="Alpha (classifier, wildcat)")
-        parser.add_argument("--kmax", type=float, default=None, help="Kmax (classifier, wildcat)")
-        parser.add_argument("--kmin", type=float, default=None, help="Kmin (classifier, wildcat)")
-        parser.add_argument("--dout", type=float, default=None, help="Dropout (classifier, wildcat)")
-        parser.add_argument("--modalities", type=int, default=None, help="Number of modalities (classifier, wildcat)")
-        parser.add_argument("--pretrained", type=bool, default=None, help="True/False (classifier, wildcat)")
-        parser.add_argument("--w", type=float, default=None, help="W for thresholding")
-        parser.add_argument("--modelname", type=str, default=None, help="Name of the model: resnet18, resnet50, "
-                                                                        "resnet101")
+        parser.add_argument("--alpha", type=float, default=None,
+                            help="Alpha (classifier, wildcat)")
+        parser.add_argument("--kmax", type=float, default=None,
+                            help="Kmax (classifier, wildcat)")
+        parser.add_argument("--kmin", type=float, default=None,
+                            help="Kmin (classifier, wildcat)")
+        parser.add_argument("--dropout", type=float, default=None,
+                            help="Dropout (classifier, wildcat)")
+        parser.add_argument("--modalities", type=int, default=None,
+                            help="Number of modalities (classifier, wildcat)")
+        parser.add_argument("--pretrained", type=str2bool, default=None,
+                            help="True/False (classifier, wildcat)")
+        parser.add_argument("--w", type=float, default=None,
+                            help="w for thresholding")
+        parser.add_argument("--sigma", type=float, default=None,
+                            help="sigma for thresholding")
+        parser.add_argument("--delta_sigma", type=float, default=None,
+                            help="delta sigma for thresholding.")
+        parser.add_argument("--max_sigma", type=float, default=None,
+                            help="max sigma for thresholding.")
+        parser.add_argument("--model_name", type=str, default=None,
+                            help="Name of the model: resnet18, resnet50, "
+                                 "resnet101")
 
-        parser.add_argument("--nbrerase", type=int, default=None, help="Number of time to erase the input image.")
-        parser.add_argument("--epocherase", type=int, default=None, help="Epoch when we activate the erasing of the "
-                                                                         "input image.")
+        parser.add_argument("--use_reg", type=str2bool, default=None,
+                            help="whether to use or not a loss regularization "
+                                 "over the background.")
+        parser.add_argument("--reg_loss", type=str, default=None,
+                            help="regularization loss over the background.")
+        parser.add_argument("--final_thres", type=float, default=None,
+                            help="Segmentation final threshold.")
+        parser.add_argument("--scale_in_cl", type=float, default=None,
+                            help="Ratio to scale input image for the "
+                                 "classifier.")
+        parser.add_argument("--padding_size", type=float, default=None,
+                            help="Ratio to padd the image.")
+        parser.add_argument("--pad_eval", type=str2bool, default=None,
+                            help="whether or not pad during evaluation.")
+        parser.add_argument("--dataset", type=str, default=None,
+                            help="dataset's name.")
 
-        # # TODO: finish this overriding!
+        parser.add_argument("--use_size_const", type=str2bool, default=None,
+                            help="whether or not use constraint on the size "
+                                 "of the background mask.")
+        parser.add_argument("--init_t", type=float, default=None,
+                            help="init t for ELB for background size "
+                                 "constraint.")
+        parser.add_argument("--max_t", type=float, default=None,
+                            help="max t for ELB for background size "
+                                 "constraint.")
+        parser.add_argument("--mulcoef", type=float, default=None,
+                            help="mult coef for ELB for background size "
+                                 "constraint.")
+        parser.add_argument("--normalize_sz", type=str2bool, default=None,
+                            help="whether or not normalize the size of "
+                                 "background mask for ELB constraint.")
+        parser.add_argument("--epsilon", type=float, default=None,
+                            help="epsilon. used for the ELB constraint over "
+                                 "the background size.")
+        parser.add_argument("--lambda_neg", type=float, default=None,
+                            help="Lambda for the background loss.")
+
+
+        parser.add_argument(
+            "--debug_subfolder", type=str, default=None,
+            help="Name of subfolder that is used for debugging. Default: ''.")
+
+        # TODO: finish this overriding!
         input_parser = parser.parse_args()
 
         def warnit(name, vl_old, vl):
@@ -1501,94 +1937,49 @@ def get_yaml_args(input_args):
             """
             print("{}: {}  -----> {}".format(name, vl_old, vl))
 
-        if input_parser.path_pre_trained is not None:
-            warnit("path_pre_trained", None, input_parser.path_pre_trained)
-            args["path_pre_trained"] = input_parser.path_pre_trained
+        attributes = input_parser.__dict__.keys()
 
-        if input_parser.strict is not None:
-            warnit("strict", None, input_parser.strict)
+        for k in attributes:
+            val_k = getattr(input_parser, k)
+            if k in args.keys():
+                if val_k is not None:
+                    warnit(k, args[k], val_k)
+                    args[k] = val_k
+                else:
+                    warnit(k, args[k], args[k])
+
+            elif k in args['model'].keys():  # try model
+                if val_k is not None:
+                    warnit('model.{}'.format(k), args['model'][k], val_k)
+                    args['model'][k] = val_k
+                else:
+                    warnit('model.{}'.format(k), args['model'][k],
+                           args['model'][k])
+
+            elif k in args['optimizer'].keys():  # try optimizer 0
+                if val_k is not None:
+                    warnit(
+                        'optimizer.{}'.format(k), args['optimizer'][k], val_k)
+                    args['optimizer'][k] = val_k
+                else:
+                    warnit(
+                        'optimizer.{}'.format(k), args['optimizer'][k],
+                        args['optimizer'][k]
+                    )
+            else:
+                raise ValueError("Key {} was not found in args. ..."
+                                 "[NOT OK]".format(k))
+
+        
+        args["MYSEED"] = os.environ['MYSEED']
+        args['model']['scale_in_cl'] = (
+            args['model']['scale_in_cl'],
+            args['model']['scale_in_cl']
+        )
+        if args['padding_size'] not in [None, 'None']:
+            args['padding_size'] = (args['padding_size'], args['padding_size'])
         else:
-            input_parser.strict = True
-            warnit("strict", None, True)
-        args["strict"] = input_parser.strict
-
-        # change the value of yaml variable IF it was required in the command line.
-        if input_parser.bsize is not None:
-            warnit("batch_size", args["batch_size"], input_parser.bsize)
-            args["batch_size"] = input_parser.bsize
-
-        if input_parser.lr is not None:
-            warnit("optimizer.lr", args["optimizer"]["lr"], input_parser.lr)
-            args["optimizer"]["lr"] = input_parser.lr
-
-        if input_parser.momentum is not None:
-            warnit("optimizer.momentum", args["optimizer"]["momentum"], input_parser.momentum)
-            args["optimizer"]["momentum"] = input_parser.momentum
-
-        if input_parser.wdecay is not None:
-            warnit("optimizer.weight_decay", args["optimizer"]["weight_decay"], input_parser.wdecay)
-            args["optimizer"]["weight_decay"] = input_parser.wdecay
-
-        if input_parser.stepsize is not None:
-            warnit("optimizer.lr_scheduler.step_size", args["optimizer"]["lr_scheduler"]["step_size"],
-                   input_parser.stepsize)
-            args["optimizer"]["lr_scheduler"]["step_size"] = input_parser.stepsize
-
-        if input_parser.lam is not None:
-            warnit("lam", args["lam"], input_parser.lam)
-            args["lam"] = input_parser.lam
-
-        if input_parser.epoch is not None:
-            warnit("max_epochs", args["max_epochs"], input_parser.epoch)
-            args["max_epochs"] = input_parser.epoch
-
-        if input_parser.fold is not None:
-            warnit("fold", args["fold"], input_parser.fold)
-            args["fold"] = input_parser.fold
-
-        if input_parser.split is not None:
-            warnit("split", args["split"], input_parser.split)
-            args["split"] = input_parser.split
-
-        if input_parser.alpha is not None:
-            warnit("model.alpha", args["model"]["alpha"], input_parser.alpha)
-            args["model"]["alpha"] = input_parser.alpha
-
-        if input_parser.kmax is not None:
-            warnit("model.kmax", args["model"]["kmax"], input_parser.kmax)
-            args["model"]["kmax"] = input_parser.kmax
-
-        if input_parser.kmin is not None:
-            warnit("model.kmin", args["model"]["kmin"], input_parser.kmin)
-            args["model"]["kmin"] = input_parser.kmin
-
-        if input_parser.dout is not None:
-            warnit("model.dropout", args["model"]["dropout"], input_parser.dout)
-            args["model"]["dropout"] = input_parser.dout
-
-        if input_parser.modalities is not None:
-            warnit("model.modalities", args["model"]["modalities"], input_parser.modalities)
-            args["model"]["modalities"] = input_parser.modalities
-
-        if input_parser.pretrained is not None:
-            warnit("model.pretrained", args["model"]["pretrained"], input_parser.pretrained)
-            args["model"]["pretrained"] = input_parser.pretrained
-
-        if input_parser.w is not None:
-            warnit("model.w", args["model"]["w"], input_parser.w)
-            args["model"]["w"] = input_parser.w
-
-        if input_parser.modelname is not None:
-            warnit("model.name", args["model"]["name"], input_parser.modelname)
-            args["model"]["name"] = input_parser.modelname
-
-        if input_parser.nbrerase is not None:
-            warnit("nbr_times_erase", args["nbr_times_erase"], input_parser.nbrerase)
-            args["nbr_times_erase"] = input_parser.nbrerase
-
-        if input_parser.epocherase is not None:
-            warnit("epoch_start_erasing", args["epoch_start_erasing"], input_parser.epocherase)
-            args["epoch_start_erasing"] = input_parser.epocherase
+            args['padding_size'] = None
 
         args_dict = copy.deepcopy(args)
         args = Dict2Obj(args)
@@ -1763,30 +2154,36 @@ def plot_curve(values, path, title="", x_str="", y_str="", best_iter=-1, plot_av
     del fig
 
 
-def plot_curves(values_dict, path, title="", best_iter=-1, plot_avg=True, avg_perd=20, dpi=100):
+def plot_curves(values_dict,
+                path,
+                title="",
+                best_iter=-1,
+                plot_avg=True,
+                avg_perd=20,
+                dpi=100
+                ):
     """
     Plot a set of curves using subplots.
 
-    :param values_dict: dict, each key contains a numpy.ndarray of values to plot (y).
+    :param values_dict: dict, each key contains a list of values
+    to plot (y).
     :param path: str, path where to save the figure.
     :param title: str, the title of the plot.
     :param best_iter: integer. The epoch of the best iteration.
-    :param plot_avg: bool, If true, a moving average if plotted over the original curve.
+    :param plot_avg: bool, If true, a moving average if plotted over the
+    original curve.
     :param avg_perd: int, the size of the moving average.
     :param dpi: int, the dpi of the image.
     """
-    assert isinstance(values_dict, dict), "'values' must be dict. You provided `{}` .... [NOT OK]".format(type(
+    msg = "'values' must be dict. You provided `{}` .... [NOT OK]".format(type(
         values_dict))
+    assert isinstance(values_dict, dict), msg
 
     nbr_curves = len(values_dict.keys())
-    sz = max([values_dict[k].size for k in values_dict.keys()])
+    sz = max([np.array(values_dict[k]).size for k in values_dict.keys()])
     if sz == 0:  # nothing has been recorded yet.
         return 0
 
-    assert isinstance(best_iter, int), "'best_iter' must be an integer. You provided `{}` .... [NOT " \
-                                       "OK]".format(type(best_iter))
-    assert (0 <= best_iter < sz) or (best_iter < 0 and abs(best_iter) <= sz), \
-        "'best_iter' = `{}` is greater than the number of available values `{}`.... [NOT OK]".format(best_iter, sz)
 
     floating = 6
     font_sz = 10
@@ -1795,21 +2192,31 @@ def plot_curves(values_dict, path, title="", best_iter=-1, plot_avg=True, avg_pe
     if plot_avg:
         alpha = 0.2
 
-    f, axes = plt.subplots(nbr_curves, 1, sharex=False, figsize=(20, 20))  # (w, h) of the figure in inches.
+    f, axes = plt.subplots(nbr_curves,
+                           1,
+                           sharex=False,
+                           figsize=(20, 20))  # (w, h) of the figure in inches.
     for i, k in enumerate(values_dict.keys()):
+        vals = np.array(values_dict[k])
         ax = axes[i]
         ax.set_ylabel(k, fontsize=font_sz)
-        best_val = values_dict[k][best_iter]
-        # ax.plot(values_dict[k], label="{}. Best_val: {}".format(k, str(prec % best_val)), alpha=alpha)
-        ax.plot(values_dict[k], label="{}".format(k), alpha=alpha)
+        ax.plot(vals, label="{}".format(k), alpha=alpha)
         ax.grid()
         if plot_avg:
-            signal = np.convolve(values_dict[k], np.ones((avg_perd,)) / avg_perd, mode="valid")
+            signal = np.convolve(vals,
+                                 np.ones((avg_perd,)) / avg_perd,
+                                 mode="valid"
+                                 )
             ax.plot(signal, label="Run. avg.")
 
-        ax.legend(loc='upper right', fancybox=True, shadow=True, prop={'size': font_sz})
+        ax.legend(loc='upper right',
+                  fancybox=True,
+                  shadow=True,
+                  prop={'size': font_sz}
+                  )
 
-        if i < (nbr_curves - 1):  # suppress the labels of the x ticks of all axes except the last one.
+        if i < (nbr_curves - 1):  # suppress the labels of the x ticks of all
+            # axes except the last one.
             ax.set_xticklabels([])
 
     ax.set_xlabel("iter. [x axis is NOT shared]", fontsize=font_sz)
@@ -2664,25 +3071,22 @@ def announce_msg(msg, upper=True):
     return output_msg
 
 
-def init_stats(train=False):
+def init_stats():
     """
-    Initialize the stats for tracking values of some dataset (for training or evaluation).
-    :param train: boolean, indicates if we are in training mode or evaluation mode.
-    :return: dict, with many keys where each one is assigned to track a specific statistic.
+    Initialize the stats for tracking values of some dataset.
+    :return: dict, with many keys where each one is assigned to track a
+    specific statistic.
     """
     # Common keys for training and evaluation.
     out = {
-        "total_loss": np.array([]),
-        "loss_pos": np.array([]),
-        "loss_neg": np.array([]),
-        "loss_class_seg": np.array([]),
-        "errors": np.array([])
+        "total_loss": [],
+        "loss_pos": [],
+        "loss_neg": [],
+        "acc": [],
+        "f1pos": [],
+        "f1neg": [],
+        "miou": []
     }
-
-    # Keys that are used only for evaluation.
-    if not train:
-        out["f1pos"] = np.array([])  # used only in EVALUATION over whole image.
-        out["f1neg"] = np.array([])  # used only in EVALUATION over whole image.
 
     return out
 
@@ -2700,10 +3104,6 @@ def create_folders_for_exp(exp_folder, name):
     l_dirs = dict()
 
     l_dirs["folder"] = join(exp_folder, name)
-    l_dirs["size_evol"] = join(exp_folder, "{}/size_evolution".format(name))
-    l_dirs["prob_evol"] = join(exp_folder, "{}/probability_evolution".format(name))
-    l_dirs["roc_evol"] = join(exp_folder, "{}/roc_evolution".format(name))
-    l_dirs["prediction"] = join(exp_folder, "{}/prediction".format(name))
 
     for k in l_dirs:
         if not os.path.exists(l_dirs[k]):
@@ -2719,9 +3119,10 @@ def check_if_allow_multgpu_mode():
     :return: ALLOW_MULTIGPUS: bool. If True, we enter multigpu mode: 1. Computation will be dispatched over the
     AVAILABLE GPUs. 2. Synch-BN is activated.
     """
-    warnings.warn("You are accessing an anonymized part of the code. We are going to exit. Come here and fix this "
-                  "according to your setup. Set the default of MULTIGPU.")
-    sys.exit(0)
+    if "CC_CLUSTER" in os.environ.keys():
+        ALLOW_MULTIGPUS = os.environ["CC_CLUSTER"] in ["beluga", "cedar", "graham"]  # CC.
+    else:
+        ALLOW_MULTIGPUS = False  # LIVIA
 
     # ALLOW_MULTIGPUS = True
     os.environ["ALLOW_MULTIGPUS"] = str(ALLOW_MULTIGPUS)

@@ -1,23 +1,39 @@
 import os
-import random
-
-import torch
-
+from os.path import join
+import pickle as pkl
+import subprocess
 import datetime as dt
+from copy import deepcopy
+
+
 import tqdm
+
+
 import numpy as np
 from scipy.special import softmax
 import torch
-import torch.nn.functional as F
 
-from tools import AverageMeter
-from tools import log, compute_dice_index
+from tools import log
+from tools import announce_msg
+from tools import VisualiseMIL
+
+from deepmil.criteria import Metrics
 
 import reproducibility
 
 
-def train_one_epoch(model, optimizer, dataloader, criterion, device, tr_stats, epoch=0, callback=None,
-                    log_file=None, ALLOW_MULTIGPUS=False, NBRGPUS=1):
+def train_one_epoch(model,
+                    optimizer,
+                    dataloader,
+                    criterion,
+                    device,
+                    tr_stats,
+                    args,
+                    epoch=0,
+                    log_file=None,
+                    ALLOW_MULTIGPUS=False,
+                    NBRGPUS=1
+                    ):
     """
     Perform one epoch of training.
     :param model:
@@ -33,428 +49,394 @@ def train_one_epoch(model, optimizer, dataloader, criterion, device, tr_stats, e
     """
     model.train()
 
-    total_loss, loss_pos, loss_neg = AverageMeter(), AverageMeter(), AverageMeter()
-    loss_class_seg, errors = AverageMeter(), AverageMeter()
+    metrics = Metrics(threshold=args.final_thres).to(device)
+    metrics.eval()
+
+    f1pos_tr, f1neg_tr, miou_tr, acc_tr = 0., 0., 0., 0.
+    cnt = 0.
 
     length = len(dataloader)
     t0 = dt.datetime.now()
+    myseed = int(os.environ["MYSEED"])
 
-    for i, (data, masks, labels) in tqdm.tqdm(enumerate(dataloader), ncols=80, total=length):
-        reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch)
+    for i, (data, masks, labels) in tqdm.tqdm(
+            enumerate(dataloader), ncols=80, total=length):
+        reproducibility.force_seed(myseed + epoch)
 
         data = data.to(device)
         labels = labels.to(device)
+        masks = torch.stack(masks)
+        masks = masks.to(device)
 
         model.zero_grad()
 
         t_l, l_p, l_n, l_c_s = 0., 0., 0., 0.
         prngs_cuda = None  # TODO: crack in optimal code.
+        bsz = data.shape[0]
 
         # Optimization:
-        if model.nbr_times_erase == 0:  # no erasing.
-            if not ALLOW_MULTIGPUS:
-                if "CC_CLUSTER" in os.environ.keys():  # TODO: crack in optimal code.
-                    assert NBRGPUS <= 1, "Something wrong. You deactivated multigpu mode, but we find {} GPUs. " \
-                                         "This will " \
-                                         "not guarantee reproducibility. We do not know why you did that. Exiting " \
-                                         ".... [NOT OK]".format(NBRGPUS)
-                seeds_threads = None
-            else:
-                assert NBRGPUS > 1, "Something is wrong. You asked for multigpu mode. But, we found {} GPUs. Exiting " \
-                                    ".... [NOT OK]".format(NBRGPUS)
-                # The seeds are generated randomly before calling the threads.
-                reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
-                seeds_threads = torch.randint(0, np.iinfo(np.uint32).max + 1, (NBRGPUS, )).to(device)
-                reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
-                prngs_cuda = []
-                # Create different prng states of cuda before forking.
-                for seed in seeds_threads:
-                    # get the corresponding state of the cuda prng with respect to the seed.
-                    torch.manual_seed(seed)
-                    torch.cuda.manual_seed(seed)
-                    prngs_cuda.append(torch.cuda.get_rng_state())
-                reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
+        # if model.nbr_times_erase == 0:  # no erasing.
+        if not ALLOW_MULTIGPUS:
+            # TODO: crack in optimal code.
+            if "CC_CLUSTER" in os.environ.keys():
+                msg = "Something wrong. You deactivated multigpu mode, " \
+                      "but we find {} GPUs. This will not guarantee " \
+                      "reproducibility. We do not know why you did that. " \
+                      "Exiting .... [NOT OK]".format(NBRGPUS)
+                assert NBRGPUS <= 1, msg
+            seeds_threads = None
+        else:
+            msg = "Something is wrong. You asked for multigpu mode. " \
+                  "But, we found {} GPUs. Exiting " \
+                  ".... [NOT OK]".format(NBRGPUS)
+            assert NBRGPUS > 1, msg
+            # The seeds are generated randomly before calling the threads.
+            reproducibility.force_seed(myseed + epoch + i)  # armor.
+            seeds_threads = torch.randint(
+                0, np.iinfo(np.uint32).max + 1, (NBRGPUS, )).to(device)
+            reproducibility.force_seed(myseed + epoch + i)  # armor.
+            prngs_cuda = []
+            # Create different prng states of cuda before forking.
+            for seed in seeds_threads:
+                # get the corresponding state of the cuda prng with respect
+                # to the seed.
+                torch.manual_seed(seed)
+                torch.cuda.manual_seed(seed)
+                prngs_cuda.append(torch.cuda.get_rng_state())
+            reproducibility.force_seed(myseed + epoch + i)  # armor.
 
-            if prngs_cuda is not None and prngs_cuda != []:  # TODO: crack in optimal code.
-                prngs_cuda = torch.stack(prngs_cuda)
-            reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
-            output = model(x=data, seed=seeds_threads, prngs_cuda=prngs_cuda)  # --> out_pos, out_neg,
-            reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
-            # masks
-            _, _, _, scores_seg, _ = output
-            reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
-            l_c_s = criterion.loss_class_head_seg(scores_seg, labels)
-            reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
+        # TODO: crack in optimal code.
+        if prngs_cuda is not None and prngs_cuda != []:
+            prngs_cuda = torch.stack(prngs_cuda)
 
-            reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
-            loss = criterion(output, labels)
-            reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
-            t_l, l_p, l_n = loss
-            # print("\t \t \t \t \t {} \t {} \t {}".format(t_l.item(), l_p.item(), l_n.item()))
-            t_l = t_l + l_c_s
-            reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
-            t_l.backward()
-            reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
-            # torch.cuda.set_rng_state_all(prng_state_all)
-            # torch.cuda.set_rng_state(prng_state)
-        else:  # we need to erase some times.
-            # Compute the cumulative mask.
-            l_c_s = 0.
-            l_c_s_per_sample = None
-            m_pos = None
-            data_safe = torch.zeros_like(data)
-            data_safe = data_safe.copy_(data)
-            history = torch.ones_like(labels).type(torch.float)  # init. history tracker coefs. to 1.
-            # if the model predicts the wrong label, we set forever the trust for this sample to 0.
-            # for er in range(model.nbr_times_erase + 1):
-            er = 0
-            while history.sum() > 0:
+        reproducibility.force_seed(myseed + epoch + i)  # armor.
+        scores_pos, scores_neg, mask_pred, sc_cl_se = model(
+            x=data,
+            seed=seeds_threads,
+            prngs_cuda=prngs_cuda
+        )
+        reproducibility.force_seed(myseed + epoch + i)  # armor.
 
-                prngs_cuda = None  # TODO: crack in optimal code.
-                if er >= model.nbr_times_erase:  # if we exceed the maximum, stop looping. We are not looping
-                    # forever!! aren't we?
-                    break
-                if not ALLOW_MULTIGPUS:
-                    if "CC_CLUSTER" in os.environ.keys():  # TODO: crack in optimal code.
-                        assert NBRGPUS <= 1, "Something wrong. You deactivated multigpu mode, but we find {} GPUs." \
-                                             " This " \
-                                             "will not guarantee reproducibility. We do not know why you did that. " \
-                                             "Exiting .... [NOT OK]".format(NBRGPUS)
-                    seeds_threads = None
-                else:
-                    assert NBRGPUS > 1, "Something is wrong. You asked for multigpu mode. But, we found {} GPUs. " \
-                                        "Exiting .... [NOT OK]".format(NBRGPUS)
-                    # The seeds are generated randomly before calling the threads.
-                    reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
-                    seeds_threads = torch.randint(0, np.iinfo(np.uint32).max + 1, (NBRGPUS,)).to(device)
-                    reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
-                    prngs_cuda = []
-                    # Create different prng states of cuda before forking.
-                    for seed in seeds_threads:
-                        # get the corresponding state of the cuda prng with respect to the seed.
-                        torch.manual_seed(seed)
-                        torch.cuda.manual_seed(seed)
-                        prngs_cuda.append(torch.cuda.get_rng_state())
-                    reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
+        msg = "shape mismatches: pred {}  true {}".format(
+            masks.shape, mask_pred.shape)
+        assert masks.shape == mask_pred.shape, msg
 
-                if prngs_cuda is not None and prngs_cuda != []:  # TODO: crack in optimal code.
-                    prngs_cuda = torch.stack(prngs_cuda)
-                reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
-                mask, scores_seg, _ = model(x=data, code="segment", seed=seeds_threads,
-                                            prngs_cuda=prngs_cuda)  # model.segment(data) mask is
-                # detached! (mask is continuous)
-                reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
-                mask, _, _ = model(x=data, code="get_mask_xpos_xneg", mask_c=mask, seed=seeds_threads,
-                                   prngs_cuda=prngs_cuda)  #
-                reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
-                # model.get_mask_xpos_xneg(data, mask)  # mask = M+.
-
-                probs_seg = criterion.softmax(scores_seg)
-                reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
-
-                l_c_s_tmp = criterion.loss_class_head_seg_red_none(scores_seg, labels)
-                reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
-                l_c_s_tmp.mean().backward()
-                reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
-                # print("Loop: \t \t \t \t \t {}".format(l_c_s_tmp.mean().item()))
-
-                # avoid maintaining the previous graph. Therefore,
-                # cut the dependency.
-                l_c_s_tmp = l_c_s_tmp.detach()
-                probs_seg = probs_seg.detach()
-
-                l_c_s += l_c_s_tmp.mean()  # for tracking only.
-                reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
-
-                # Update the mask (m_pos: M+): The negative mask is expected to contain all the non-discriminative
-                # regions. However, it may still contain some discriminative parts. In order to find them, we apply M-
-                # over the input image (erase the found discriminative parts) and try to localize NEW discriminative
-                # regions.
-
-                if er == 0:  # if the first time, create the tracking mask.
-                    m_pos = torch.zeros_like(mask)
-                    l_c_s_per_sample = torch.zeros_like(l_c_s_tmp)
-                    l_c_s_per_sample = l_c_s_per_sample.copy_(l_c_s_tmp)
-
-                trust = torch.ones_like(labels).type(torch.float)  # init. trust coefs. to 1.
-                p_y, pred = torch.max(probs_seg, dim=1)
-
-                # overall trust:
-                decay = np.exp(-float(er) / model.sigma_erase)
-                # per-sample trust:
-                check_loss = (l_c_s_tmp <= l_c_s_per_sample).type(torch.float)
-                check_label = (pred == labels).type(torch.float)
-
-                trust *= decay * check_label * check_loss * p_y
-
-                # Update the history
-                history = torch.min(check_label, history)
-
-                # Apply the history to the trust:
-                trust *= history
-
-                trust = trust.view(trust.size()[0], 1, 1, 1)
-                m_pos_tmp = trust * mask
-                m_pos = torch.max(m_pos, m_pos_tmp)  # accumulate the masks.
-                # Apply the cumulative negative mask over the image
-                data = data * (1 - m_pos) * (trust != 0).type(torch.float) + data * (trust == 0).type(torch.float)
-                er += 1
-                reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
-
-            l_c_s /= (model.nbr_times_erase + 1)
-
-            # Now: m_neg contains the smallest negative area == largest positive area.
-            # compute x_pos, x_neg
-            m_neg = 1 - m_pos
-            x_neg = data_safe * m_neg
-            x_pos = data_safe * m_pos
-
-            prngs_cuda = None  # TODO: crack in optimal code.
-
-            # Classify
-            if not ALLOW_MULTIGPUS:
-                if "CC_CLUSTER" in os.environ.keys():  # TODO: crack in optimal code.
-                    assert NBRGPUS == 1, "Something wrong. You deactivated multigpu mode, but we find {} GPUs. This " \
-                                         "will not guarantee reproducibility. We do not know why you did that. " \
-                                         "Exiting .... [NOT OK]".format(NBRGPUS)
-                seeds_threads = None
-            else:
-                assert NBRGPUS > 1, "Something is wrong. You asked for multigpu mode. But, we found {} GPUs. " \
-                                    "Exiting .... [NOT OK]".format(NBRGPUS)
-                # The seeds are generated randomly before calling the threads.
-                reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
-                seeds_threads = torch.randint(0, np.iinfo(np.uint32).max + 1, (NBRGPUS,)).to(device)
-                reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
-                prngs_cuda = []
-                # Create different prng states of cuda before forking.
-                for seed in seeds_threads:
-                    # get the corresponding state of the cuda prng with respect to the seed.
-                    torch.manual_seed(seed)
-                    torch.cuda.manual_seed(seed)
-                    prngs_cuda.append(torch.cuda.get_rng_state())
-                reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
-
-            if prngs_cuda is not None and prngs_cuda != []:  # TODO: crack in optimal code.
-                prngs_cuda = torch.stack(prngs_cuda)
-            reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
-            out_pos = model(x=x_pos, code="classify", seed=seeds_threads,
-                            prngs_cuda=prngs_cuda)  # model.classify(x_pos)
-            reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
-            out_neg = model(x=x_neg, code="classify", seed=seeds_threads,
-                            prngs_cuda=prngs_cuda)  # model.classify(x_neg)
-            reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
-
-            output = out_pos, out_neg, None, None, None
-            reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
-            loss = criterion(output, labels)
-
-            t_l, l_p, l_n = loss
-            reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
-            t_l.backward()
-            t_l += l_c_s
-            # print("ERASE: \t \t \t \t \t {} \t {} \t {}".format(t_l.item(), l_p.item(), l_n.item()))
-            reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
+        t_loss, l_p, l_n, l_seg = criterion(scores_pos,
+                                            sc_cl_se,
+                                            labels,
+                                            mask_pred,
+                                            scores_neg
+                                            )
+        t_loss.backward()
 
         # Update params.
-        reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
         optimizer.step()
-        reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch + i)  # armor.
         # End optimization.
+        acc, dice_forg, dice_back, miou = metrics(
+            scores=scores_pos,
+            labels=labels,
+            masks_pred=mask_pred.contiguous().view(bsz, -1),
+            masks_trg=masks.contiguous().view(bsz, -1),
+            avg=True
+            )
 
-        total_loss.append(t_l.item())
-        loss_pos.append(l_p.item())
-        loss_neg.append(l_n.item())
-        loss_class_seg.append(l_c_s.item())
+        # tracking
+        tr_stats["total_loss"].append(t_loss.item())
+        tr_stats["loss_pos"].append(l_p.item())
+        tr_stats["loss_neg"].append(l_n.item())
+        tr_stats["acc"].append(acc * 100.)
+        tr_stats["f1pos"].append(dice_forg * 100.)
+        tr_stats["f1neg"].append(dice_back * 100.)
+        tr_stats['miou'].append(miou * 100.)
 
-        errors.append((output[0][0].argmax(dim=1) != labels).float().mean().item() * 100.)  # error over the minibatch.
+        f1pos_tr += dice_forg
+        f1neg_tr += dice_back
+        miou_tr += miou
+        acc_tr += acc
+        cnt += bsz
 
-        if callback and ((i + 1) % callback.fre == 0 or (i + 1) == length):
-            callback.scalar("Train_loss", i / length + epoch, total_loss.last_avg)
-            callback.scalar("Train_error", i / length + epoch, errors.lat_avg)
+    # avg
+    f1neg_tr = f1neg_tr * 100. / float(cnt)
+    f1pos_tr = f1pos_tr * 100. / float(cnt)
+    acc_tr = acc_tr * 100. / float(cnt)
+    miou_tr = miou_tr * 100. / float(cnt)
 
-    to_write = "Train epoch {:>2d}: Total L.avg: {:.5f}, Pos.L.avg: {:.5f}, Neg.L.avg: {:.5f}, " \
-               "Cl.Seg.L.avg: {:.5f}, LR {}, t:{}".format(
-                epoch, total_loss.avg, loss_pos.avg, loss_neg.avg, loss_class_seg.avg,
-                ['{:.2e}'.format(group["lr"]) for group in optimizer.param_groups], dt.datetime.now() - t0
+    to_write = "Train epoch {:>2d}: f1+: {:.2f}, f1-: {:.2f}, " \
+               "miou: {:.2f}, acc: {:.2f}, LR {}, t:{}".format(
+                epoch, f1pos_tr, f1neg_tr, miou_tr, acc_tr,
+                ['{:.2e}'.format(group["lr"]) for group in optimizer.param_groups],
+                dt.datetime.now() - t0
                 )
     print(to_write)
     if log_file:
         log(log_file, to_write)
 
-    # Update stats:
-    tr_stats["total_loss"] = np.append(tr_stats["total_loss"], np.array(total_loss.values))
-    tr_stats["loss_pos"] = np.append(tr_stats["loss_pos"], np.array(loss_pos.values))
-    tr_stats["loss_neg"] = np.append(tr_stats["loss_neg"], np.array(loss_neg.values))
-    tr_stats["loss_class_seg"] = np.append(tr_stats["loss_class_seg"], np.array(loss_class_seg.values))
-    tr_stats["errors"] = np.append(tr_stats["errors"], np.array(errors.values))
     return tr_stats
 
 
-def validate(model, dataset, dataloader, criterion, device, stats, epoch=0, callback=None, log_file=None,
-             name_set=""):
+def store_pred_img(i,
+                   dataset,
+                   pred_mask_bin,
+                   pred_mask_con,
+                   dice_forg,
+                   dice_back,
+                   prob,
+                   pred_label,
+                   args,
+                   outd):
+    visualiser = VisualiseMIL(alpha=args.alpha_plot,
+                              floating=args.floating,
+                              height_tag=args.height_tag,
+                              bins=args.bins,
+                              rangeh=args.rangeh
+                              )
+    img = dataset.get_original_input_img(i)  # PIL.Image.Image uint8 RGB image.
+    label = dataset.get_original_input_label_int(i)  # int.
+    true_mask = np.array(dataset.get_original_input_mask(i))
+    true_mask = (true_mask != 0).astype(np.float32)
+
+    img_visu = visualiser(img,
+                          prob,
+                          pred_label,
+                          deepcopy(pred_mask_con),
+                          dice_forg,
+                          dice_back,
+                          args.name_classes,
+                          "Final",
+                          pred_mask_bin=pred_mask_bin,
+                          use_tags=True,
+                          label=label,
+                          mask=true_mask,
+                          show_hists=False,
+                          bins=args.bins,
+                          rangeh=args.rangeh
+                          )
+    # name_file = dataset.absolute_paths_imgs[i].split(os.sep)[-1].split(".")[
+    #     0]  # e.g. 'train_13'
+    name_file = str(i)
+    img_visu.save(join(outd, name_file + "." + args.extension[0]),
+                  args.extension[1], optimize=True)
+
+
+def validate(model,
+             dataset,
+             dataloader,
+             criterion,
+             device,
+             stats,
+             args,
+             folderout=None,
+             epoch=0,
+             log_file=None,
+             name_set="",
+             store_on_disc=False,
+             store_imgs=False
+             ):
     """
-    Perform a validation over the validation set. Assumes a batch size of 1. (images do not have the same size,
+    Perform a validation over the validation set. Assumes a batch size of 1.
+    (images do not have the same size,
     so we can't stack them in one tensor).
     Validation samples may be large to fit all in the GPU at once.
 
     Note: criterion is deppmil.criteria.TotalLossEval().
     """
-    # TODO: [FUTURE] find a way to do final processing within the loop below such as drawing and all that. This will
-    #  avoid STORING the results of validating over huge datasets, THEN, process samples one by one!!! it is not
-    #  efficient. This should be an option to be activated/deactivated when needed. For instance, during validation,
-    #  it is not necessary, while at the end, it is necessary.
     model.eval()
+    metrics = Metrics(threshold=args.final_thres).to(device)
+    metrics.eval()
 
-    total_loss, loss_pos, loss_neg = AverageMeter(), AverageMeter(), AverageMeter()
-    loss_class_seg, f1pos, f1neg = AverageMeter(), AverageMeter(), AverageMeter()
-    errors = AverageMeter()
+    f1pos_, f1neg_, miou_, acc_ = 0., 0., 0., 0.
+    cnt = 0.
+    total_loss_ = 0.
+    loss_pos_ = 0.
+    loss_neg_ = 0.
+
+    mask_fd = None
+    name_fd_masks = "masks"  # where to store the predictions.
+    name_fd_masks_bin = "masks_bin"  # where to store the bin masks and al.
+    if folderout is not None:
+        mask_fd = join(folderout, name_fd_masks)
+        bin_masks_fd = join(folderout, name_fd_masks_bin)
+        if not os.path.exists(mask_fd):
+            os.makedirs(mask_fd)
+
+        if not os.path.exists(bin_masks_fd):
+            os.makedirs(bin_masks_fd)
 
     length = len(dataloader)
-    predictions = np.zeros(length, dtype=int)
-    labels = np.zeros(length)
-    probs = np.zeros(length)  # prob. of the predicted class (using positive region).
-    probs_pos = np.zeros((length, model.num_classes))  # prob. over the positive region.
-    probs_neg = np.zeros((length, model.num_classes))  # prob. over the negative region.
-    masks_pred = []
     t0 = dt.datetime.now()
+    myseed = int(os.environ["MYSEED"])
 
     with torch.no_grad():
-        for i, (data, mask, label) in tqdm.tqdm(enumerate(dataloader), ncols=80, total=length):
-            # TODO: FUTURE allow parallel validation over mutliple GPUs with samples with different sizes. Make the
-            #  batch as a list for validation for instance. It does not make sens to validayte sample by sample while
-            #  you are able to run multiple forwards at once. An alternative is to create a particular dataparallel
-            #  that loops over a list instead of batch-size dim.
-            reproducibility.force_seed(int(os.environ["MYSEED"]) + epoch)
+        for i, (data, mask, label) in tqdm.tqdm(
+                enumerate(dataloader), ncols=80, total=length):
 
-            assert data.size()[0] == 1, "Expected a batch size of 1. Found `{}`  .... [NOT OK]".format(data.size()[0])
+            reproducibility.force_seed(myseed + epoch + 1)
 
-            labels[i] = label.item()  # batch size 1.
+            msg = "Expected a batch size of 1. Found `{}`  .... " \
+                  "[NOT OK]".format(data.size()[0])
+            assert data.size()[0] == 1, msg
+            bsz = data.size()[0]
+
             data = data.to(device)
-            label = label.to(device)
+            labels = label.to(device)
+            mask = torch.tensor(mask[0])
+            mask_t = mask.unsqueeze(0).to(device)
+            assert mask_t.ndim == 4, "ndim = {} must be 4.".format(mask_t.ndim)
 
-            mask_t = [m.to(device) for m in mask]
-
-            # In validation, we do not need reproducibility since everything is expected to deterministic. Plus,
+            # In validation, we do not need reproducibility since everything
+            # is expected to deterministic. Plus,
             # we use only one gpu since the batch size os 1.
-            output = model(x=data, seed=None)  # --> out_pos, out_neg, masks
+            scores_pos, scores_neg, mask_pred, sc_cl_se = model(x=data,
+                                                               seed=None
+                                                                )
+            t_loss, l_p, l_n, l_seg = criterion(scores_pos,
+                                                sc_cl_se,
+                                                labels,
+                                                mask_pred,
+                                                scores_neg
+                                               )
 
-            out_pos = output[0][0][0]  # scores: take the first element of the batch.
-            out_neg = output[1][0][0]  # scores: take the first element of the batch.
-            assert out_pos.ndimension() == 1, "We expected only 1 dim. We found {}. Make sure you are using abatch " \
-                                              "size of 1. .... [NOT OK]".format(out_pos.ndimension())
 
-            pred_label = out_pos.argmax()
-            predictions[i] = int(pred_label.item())
-
-            scores_pos = softmax(out_pos.cpu().detach().numpy())
-            scores_neg = softmax(out_neg.cpu().detach().numpy())
-            probs_pos[i] = scores_pos
-            probs_neg[i] = scores_neg
-            probs[i] = scores_pos[predictions[i]]
-            mask_pred = torch.squeeze(output[2]).cpu().detach().numpy()  # predicted mask.
+            mask_pred = mask_pred.squeeze()
             # check sizes of the mask:
-            _, h, w = mask_t[0].size()
+            _, _, h, w = mask_t.shape
             hp, wp = mask_pred.shape
 
-            if dataset.dataset_name in ["Caltech-UCSD-Birds-200-2011", "Oxford-flowers-102"]:
-                # Remove the padding if is there was any. (the only one allowed: force_div_32)
-                assert dataset.padding_size is None, "dataset.padding_size is supposed to be None. We do not support" \
-                                                     "padding of this type for this dataset."
-
-                # Important: we assume that dataloader of this dataset is not shuffled to make this access using the
-                # index (i) correct. If shuffled, the access is not correct.
-                w_mask_no_pad_forced, h_mask_no_pad_forced = dataset.original_images_size[i]
-
-                if dataset.force_div_32:
-                    # Find the size of the mask without padding.
-                    w_up, h_up = dataset.get_upscaled_dims(w_mask_no_pad_forced, h_mask_no_pad_forced,
-                                                           dataset.up_scale_small_dim_to)
-                    # Remove the padded parts by cropping at the center.
-                    mask_pred = mask_pred[int(hp / 2) - int(h_up / 2): int(hp / 2) + int(h_up / 2) + (h_up % 2),
-                                          int(wp / 2) - int(w_up / 2): int(wp / 2) + int(w_up / 2) + (w_up % 2)]
-                    assert mask_pred.shape[0] == h_up, "h_up={}, mask_pred.shape[0]={}. Expected to be the same." \
-                                                       "[Not OK]".format(h_up, mask_pred.shape[0])
-                    assert mask_pred.shape[1] == w_up, "w_up={}, mask_pred.shape[1]={}. Expected to be the same." \
-                                                       "[Not OK]".format(w_up, mask_pred.shape[1])
-                # Now, downscale the predicted mask to the size of the true mask. We use
-                # torch.nn.functional.interpolate.
-                msk_pred_torch = torch.from_numpy(mask_pred).view(1, 1, mask_pred.shape[0], mask_pred.shape[1])
-                mask_pred = F.interpolate(msk_pred_torch, size=(h_mask_no_pad_forced, w_mask_no_pad_forced),
-                                          mode="bilinear", align_corners=True).squeeze().numpy()
-
-                # Now get the correct sizes:
-                hp, wp = mask_pred.shape
-                assert hp == h, "hp={}, h={} are supposed to be the same! .... [NOT OK]".format(hp, h)
-                assert wp == w, "wp={}, w={} are supposed to be the same! .... [NOT OK]".format(wp, w)
-
-            if (h != hp) or (w != wp):  # This means that we have padded the input image.
-                # We crop the predicted mask in the center.
+            if (h != hp) or (w != wp):  # This means that we have padded the
+                # input image. We crop the predicted mask in the center.
                 mask_pred = mask_pred[int(hp / 2) - int(h / 2): int(hp / 2) + int(h / 2) + (h % 2),
                                       int(wp / 2) - int(w / 2): int(wp / 2) + int(w / 2) + (w % 2)]
-            masks_pred.append(mask_pred)
 
-            loss = criterion(output, label, mask_t)
-            t_l, l_p, l_n, l_c_s = loss
+            mask_pred = mask_pred.unsqueeze(0).unsqueeze(0)
 
-            total_loss.append(t_l.item())
-            loss_pos.append(l_p.item())
-            loss_neg.append(l_n.item())
-            loss_class_seg.append(l_c_s.item())
-            # We no longer compute the dice in the losseval, since masks need some transformations before being ready
-            # for dice computations. Such transformations are dataset-dependent and we do not want to crowd the eval
-            # loss. It must be clean. Now, Dice is computed over CPU using a dice function.
+            acc, dice_forg, dice_back, miou = metrics(
+                scores=scores_pos,
+                labels=labels,
+                masks_pred=mask_pred.contiguous().view(bsz, -1),
+                masks_trg=mask_t.contiguous().view(bsz, -1),
+                avg=False
+            )
 
-            x1 = ((np.ravel(mask[0]) >= 0.5) * 1.).astype(np.float32)
-            x2 = ((np.ravel(mask_pred) >= 0.5) * 1.).astype(np.float32)
-            # Since F1 and Dice index are the same over binary data, and, for computation time reasons (Dice index is
-            # way faster than F1 in ter of speed), we decided to call Dice function.
-            # Note: in practice, there maybe a difference in ter of precision (e.g., 1e-7).
-            f1pos.append(compute_dice_index(x1, x2))
-            f1neg.append(compute_dice_index(1. - x1, 1. - x2))
+            # tracking
+            f1pos_ += dice_forg
+            f1neg_ += dice_back
+            miou_ += miou
+            acc_ += acc
+            cnt += bsz
+            total_loss_ += t_loss.item()
+            loss_pos_ += l_p.item()
+            loss_neg_ += l_n.item()
 
-            errors.append((pred_label != label).item())
+            if (folderout is not None) and store_on_disc:
+                # binary mask
+                bin_pred_mask = metrics.get_binary_mask(mask_pred).squeeze()
+                bin_pred_mask = bin_pred_mask.cpu().detach().numpy().astype(np.bool)
+                to_save = {
+                    "bin_pred_mask": bin_pred_mask,
+                    "dice_forg": dice_forg,
+                    "dice_back": dice_back,
+                    "i": i
+                }
 
-    if callback:
-        callback.scalar('Val_loss', epoch + 1, total_loss.avg)
-        callback.scalar('Val_error', epoch + 1, errors.avg)
+                with open(join(bin_masks_fd, "{}.pkl".format(i)), "wb") as fbin:
+                    pkl.dump(to_save, fbin, protocol=pkl.HIGHEST_PROTOCOL)
 
-    to_write = ">>>>>>>>>>>>>>>>>> Total L.avg: {:.5f}, Pos.L.avg: {:.5f}, Neg.L.avg: {:.5f}, " \
-               "Cl.Seg.L.avg: {:.5f}, F1+: {:.5f}, F1-: {:.5f}, Error.avg: {:.2f}, t:{}, Eval {} epoch {:>2d}, " \
-               "".format(
-                total_loss.avg, loss_pos.avg, loss_neg.avg, loss_class_seg.avg,
-                f1pos.avg, f1neg.avg, errors.avg * 100, dt.datetime.now() - t0, name_set, epoch
-                )
+            if (folderout is not None) and store_imgs and store_on_disc:
+                pred_label = int(scores_pos.argmax().item())
+                probs = softmax(scores_pos.cpu().detach().numpy())
+                prob = float(probs[0, pred_label])
+
+                store_pred_img(i,
+                               dataset,
+                               bin_pred_mask * 1.,
+                               mask_pred.squeeze().cpu().detach().numpy(),
+                               dice_forg,
+                               dice_back,
+                               prob,
+                               pred_label,
+                               args,
+                               mask_fd,
+                               )
+
+
+    # avg
+    total_loss_ /= float(cnt)
+    loss_pos_ /= float(cnt)
+    loss_neg_ /= float(cnt)
+    acc_ *= (100. / float(cnt))
+    f1pos_ *= (100. / float(cnt))
+    f1neg_ *= (100. / float(cnt))
+    miou_ *= (100. / float(cnt))
+
+    if stats is not None:
+        stats["total_loss"].append(total_loss_)
+        stats["loss_pos"].append(loss_pos_)
+        stats["loss_neg"].append(loss_neg_)
+        stats["acc"].append(acc_)
+        stats["f1pos"].append(f1pos_)
+        stats["f1neg"].append(f1neg_)
+        stats['miou'].append(miou_)
+
+    to_write = "EVAL ({}): TLoss: {:.2f}, L+: {:.2f}, L-: {:.2f}, " \
+               "F1+: {:.2f}%, F1-: {:.2f}%, MIOU: {:.2f}%, ACC: {:.2f}%, " \
+               "t:{}, epoch {:>2d}.".format(
+        name_set,
+        total_loss_,
+        loss_pos_,
+        loss_neg_,
+        f1pos_,
+        f1neg_,
+        miou_,
+        acc_,
+        dt.datetime.now() - t0,
+        epoch
+        )
     print(to_write)
     if log_file:
         log(log_file, to_write)
 
-    # Update stats
-    stats["total_loss"] = np.append(stats["total_loss"], np.array(total_loss.values))
-    stats["loss_pos"] = np.append(stats["loss_pos"], np.array(loss_pos.values))
-    stats["loss_neg"] = np.append(stats["loss_neg"], np.array(loss_neg.values))
-    stats["loss_class_seg"] = np.append(stats["loss_class_seg"], np.array(loss_class_seg.values))
-    stats["errors"] = np.append(stats["errors"], np.array(errors.values).mean() * 100)
-    stats["f1pos"] = np.append(stats["f1pos"], np.array(f1pos.values).mean() * 100)
-    stats["f1neg"] = np.append(stats["f1neg"], np.array(f1neg.values).mean() * 100)
-    pred = {
-        "predictions": predictions,
-        "labels": labels,
-        "probs": probs,
-        "masks": masks_pred,
-        "probs_pos": probs_pos,
-        "probs_neg": probs_neg
-    }
 
-    # Collect stats from only this epoch. (can be useful to plot distributions since we lose the actual stats due to
-    # the above update!!!!)
-    stats_now = {
-        "total_loss": np.array(total_loss.values),
-        "loss_pos": np.array(loss_pos.values),
-        "loss_neg": np.array(loss_neg.values),
-        "loss_class_seg": np.array(loss_class_seg.values),
-        "errors": np.array(errors.values).mean() * 100,
-        "f1pos": np.array(f1pos.values),
-        "f1neg": np.array(f1neg.values)
-    }
+    if folderout is not None:
+        msg = "EVAL {}: \n".format(name_set)
+        msg += "ACC {}% \n".format(acc_)
+        msg += "F1+ {}% \n".format(f1pos_)
+        msg += "F1- {}% \n".format(f1neg_)
+        msg += "MIOU {}% \n".format(miou_)
+        announce_msg(msg)
+        if log_file:
+            log(log_file, msg)
 
-    return stats, stats_now, pred
+    if (folderout is not None) and store_on_disc:
+        pred = {
+            "total_loss": total_loss_,
+            "loss_pos": loss_pos_,
+            "loss_neg": loss_neg_,
+            "acc": acc_,
+            "f1pos": f1pos_,
+            "f1neg": f1neg_,
+            "miou_": miou_
+        }
+        with open(
+                join(folderout, "pred--{}.pkl".format(name_set)), "wb") as fout:
+            pkl.dump(pred, fout, protocol=pkl.HIGHEST_PROTOCOL)
+
+        # compress. delete folder.
+        cmdx = [
+            "cd {} ".format(mask_fd),
+            "cd .. ",
+           # "tar -cf {}.tar.gz {}".format(name_fd_masks, name_fd_masks),
+           # "rm -r {}".format(name_fd_masks)
+        ]
+
+        cmdx += [
+            "cd {} ".format(bin_masks_fd),
+            "cd .. ",
+            "tar -cf {}.tar.gz {}".format(name_fd_masks_bin, name_fd_masks_bin),
+            "rm -r {}".format(name_fd_masks_bin)
+        ]
+
+        cmdx = " && ".join(cmdx)
+        print("Running bash-cmds: \n{}".format(cmdx.replace("&& ", "\n")))
+        subprocess.run(cmdx, shell=True, check=True)
+    else:
+        return stats

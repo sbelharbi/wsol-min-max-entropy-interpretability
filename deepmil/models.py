@@ -197,42 +197,84 @@ class WildCatClassifierHead(nn.Module):
         return scores, maps
 
 
+class MaskHead(nn.Module):
+    """
+    Class that pulls the mask from feature maps.
+    """
+    def __init__(self, inplans, modalities, nbr_masks):
+        """
+
+        :param inplans: int. number of input features.
+        :param modalities: int. number of modalities.
+        :param nbr_masks: int. number of masks to pull.
+        """
+        super(MaskHead, self).__init__()
+
+        self.to_modalities = nn.Conv2d(inplans,
+                                       nbr_masks * modalities,
+                                       kernel_size=1,
+                                       bias=True
+                                       )
+        self.to_masks = ClassWisePooling(nbr_masks, modalities)
+
+    def forward(self, x):
+        """
+        The forward function.
+        :param x: input tensor fetaure maps.
+        :return:
+        """
+        modalities = self.to_modalities(x)
+        masks = self.to_masks(modalities)
+
+        return masks
+
+
+
 class ResNet(nn.Module):
-    def __init__(self, block, layers, num_masks=1, sigma=0.5, w=8, num_classes=2, scale=(0.5, 0.5),
-                 modalities=4, kmax=0.5, kmin=None, alpha=0.6, dropout=0.0, nbr_times_erase=0, sigma_erase=10):
+    def __init__(self,
+                 block,
+                 layers,
+                 sigma=0.5,
+                 w=8,
+                 num_classes=2,
+                 scale=(0.5, 0.5),
+                 modalities=4,
+                 kmax=0.5,
+                 kmin=None,
+                 alpha=0.6,
+                 dropout=0.0
+                 ):
         """
         Init. function.
         :param block: class of the block.
         :param layers: list of int, number of layers per block.
         :param num_masks: int, number of masks to output. (supports only 1).
         """
-        assert num_masks == 1, "The model produces only 1 mask (where 1 is the regions of interest and 0 is the " \
-                               "background). You asked for `{}` masks .... [NOT OK]".format(num_masks)
 
         # classifier stuff
-        assert isinstance(scale, tuple) or isinstance(scale, list) or isinstance(scale, float), "`scale` should be a " \
-                                                                                                "tuple, or a list, " \
-                                                                                                "or a float with " \
-                                                                                                "values in ]0, " \
-                                                                                                "1]. You provided " \
-                                                                                                "{} .... [NOT " \
-                                                                                                "OK]".format(scale)
+        cnd = isinstance(scale, tuple) or isinstance(scale, list)
+        cnd = cnd or isinstance(scale, float)
+        msg = "`scale` should be a tuple, or a list, or a float with " \
+              "values in ]0, 1]. You provided {} .... [NOT " \
+              "OK]".format(scale)
+        assert cnd, msg
+
         if isinstance(scale, tuple) or isinstance(scale, list):
-            assert 0 < scale[0] <= 1, "`scale[0]` (height) should be > 0 and <= 1. You provided `{}` ... [NOT " \
-                                      "OK]".format(scale[0])
-            assert 0 < scale[0] <= 1, "`scale[1]` (width) should be > 0 and <= 1. You provided `{}` .... [NOT " \
-                                      "OK]".format(scale[1])
+            msg = "`scale[0]` (height) should be > 0 and <= 1. " \
+                  "You provided `{}` ... [NOT OK]".format(scale[0])
+            assert 0 < scale[0] <= 1, msg
+            msg = "`scale[1]` (width) should be > 0 and <= 1. " \
+                  "You provided `{}` .... [NOT OK]".format(scale[1])
+            assert 0 < scale[0] <= 1, msg
         elif isinstance(scale, float):
-            assert 0 < scale <= 1, "`scale` should be > 0, <= 1. You provided `{}` .... [NOT OK]".format(scale)
+            msg = "`scale` should be > 0, <= 1. You provided `{}` .... " \
+                  "[NOT OK]".format(scale)
+            assert 0 < scale <= 1, msg
             scale = (scale, scale)
 
         self.scale = scale
         self.num_classes = num_classes
-        self.nbr_times_erase = nbr_times_erase
-        self.nbr_times_erase_backup = nbr_times_erase
-        assert sigma_erase > 0, "`sigma_erase` must be positive float. You provided {} .... [NOT OK]".format(
-            sigma_erase)
-        self.sigma_erase = float(sigma_erase)
+
 
         self.inplanes = 128
         super(ResNet, self).__init__()
@@ -280,25 +322,38 @@ class ResNet(nn.Module):
                 m.weight.data.fill_(1)
                 m.bias.data.zero_()
 
-        # =========================================  SEGMENTOR =========================================
-        self.conts1 = torch.tensor([sigma], requires_grad=False).float()
-        self.register_buffer("sigma", self.conts1)
+        # =================  SEGMENTOR =========================================
+        self.sigma = sigma
 
         self.const2 = torch.tensor([w], requires_grad=False).float()
         self.register_buffer("w", self.const2)
 
-        self.headseg = WildCatClassifierHead(in_channel32, modalities, num_classes, kmax=kmax, kmin=kmin, alpha=alpha,
-                                             dropout=dropout)
+        self.mask_head = WildCatClassifierHead(in_channel32,
+                                               modalities,
+                                               num_classes,
+                                               kmax=kmax,
+                                               kmin=kmin,
+                                               alpha=alpha,
+                                               dropout=dropout
+                                               )
 
-        print("Num. parameters up32: {}".format(sum([p.numel() for p in self.headseg.parameters()])))
-        # =============================================================================================
+        print("Num. parameters headmask: {}".format(
+            sum([p.numel() for p in self.mask_head.parameters()])))
+        # ======================================================================
 
-        # ======================================== CLASSIFIER ==========================================
-        self.cl32 = WildCatClassifierHead(in_channel32, modalities, num_classes, kmax=kmax, kmin=kmin, alpha=alpha,
-                                          dropout=dropout)
-        # ==============================================================================================
+        # ================================ CLASSIFIER ==========================
+        self.cl32 = WildCatClassifierHead(in_channel32,
+                                          modalities,
+                                          num_classes,
+                                          kmax=kmax,
+                                          kmin=kmin,
+                                          alpha=alpha,
+                                          dropout=dropout
+                                          )
+        # ======================================================================
 
-    def _make_layer(self, block, planes, blocks, stride=1, dilation=1, multi_grid=1):
+    def _make_layer(self, block, planes, blocks, stride=1, dilation=1,
+                    multi_grid=1):
         downsample = None
         if stride != 1 or self.inplanes != planes * block.expansion:
             downsample = nn.Sequential(
@@ -315,58 +370,19 @@ class ResNet(nn.Module):
 
         return nn.Sequential(*layers)
 
-    def gpu_parallelize(self):
-        """
-        Parallelize parts of the model over multiple GPUs.
-        Using nn.DataParallel() over the entire model does not allow accessing model'e attributes.
-        We used loader.MyDataParallel(), however, it raises the following error;
-        RecursionError: maximum recursion depth exceeded while calling a Python object
-
-        Things to parallelize:
-            1. self.conv1
-            2. self.bn1
-            3. self.relu1
-            4. self.conv2
-            5. self.bn2
-            6. self.relu2
-            7. self.conv3
-            8. self.bn3
-            9. self.relu3
-            10. self.maxpool
-            11. self.layer1
-            12. self.layer2
-            13. self.layer3
-            14. self.layer4
-            15. self.headseg
-            16. self.cl32
-        :return:
-        """
-        self.conv1 = nn.DataParallel(self.conv1)
-        self.bn1 = nn.DataParallel(self.bn1)
-        self.relu1 = nn.DataParallel(self.relu1)
-        self.conv2 = nn.DataParallel(self.conv2)
-        self.bn2 = nn.DataParallel(self.bn2)
-        self.relu2 = nn.DataParallel(self.relu2)
-        self.conv3 = nn.DataParallel(self.conv3)
-        self.bn3 = nn.DataParallel(self.bn3)
-        self.relu3 = nn.DataParallel(self.relu3)
-        self.maxpool = nn.DataParallel(self.maxpool)
-        self.layer1 = nn.DataParallel(self.layer1)
-        self.layer2 = nn.DataParallel(self.layer2)
-        self.layer3 = nn.DataParallel(self.layer3)
-        self.layer4 = nn.DataParallel(self.layer4)
-        self.headseg = nn.DataParallel(self.headseg)
-        self.cl32 = nn.DataParallel(self.cl32)
-
     def forward(self, x, code=None, mask_c=None, seed=None, prngs_cuda=None):
         """
         Forward function.
 
-        MultiGPU issue: During training, we need at some point to call the following functions:
+        MultiGPU issue: During training, we need at some point to call the
+        following functions:
         self.get_mask_xpos_xneg(), self.segment(), self.classify().
-        Since we wrap the model within torch.nn.DataParallel, the function parallel_apply() needs to call the model
-        (call self.forward()). Therefore, it makes it complicated to call other functions such as self.segment().
-        To deal with this, de decide to encode the calling of the sub-functions of the model so we can pass every time
+        Since we wrap the model within torch.nn.DataParallel, the function
+         parallel_apply() needs to call the model
+        (call self.forward()). Therefore, it makes it complicated to call other
+        functions such as self.segment().
+        To deal with this, de decide to encode the calling of the sub-functions
+        of the model so we can pass every time
         by self.forward().
         Code:
             1. None: standard forward.
@@ -378,28 +394,34 @@ class ResNet(nn.Module):
         :param x: input.
         :param code: None or a string. See above.
         :param mask_c: input for self.self.get_mask_xpos_xneg()
-        :param seed: int, a seed for the case of Multigpus to guarantee reproducibility for a fixed number of GPUs.
-        See  https://discuss.pytorch.org/t/did-anyone-succeed-to-reproduce-their-code-when-using-multigpus/47079?u=sbelharbi
-        In the case of one GPU, the seed in not necessary (and it will not be used); se set it to None.
+        :param seed: int, a seed for the case of Multigpus to
+        guarantee reproducibility for a fixed number of GPUs.
+        See  https://discuss.pytorch.org/t/did-anyone-succeed-to-reproduce-
+        their-code-when-using-multigpus/47079?u=sbelharbi
+        In the case of one GPU, the seed in not necessary (and it will not be
+         used); se set it to None.
         :param prngs_cuda: value returned by torch.cuda.get_prng_state().
         :return:
         """
         if code is None:
             # 1. Segment: forward.
-            mask, scores_seg, maps_seg = self.segment(x=x, seed=seed, prngs_cuda=prngs_cuda)  # mask is detached!
+            mask, cl_scores_seg = self.segment(x=x,
+                                               seed=seed,
+                                               prngs_cuda=prngs_cuda
+                                               )
 
             mask, x_pos, x_neg = self.get_mask_xpos_xneg(x, mask)
 
-            # 3. Classify.
-            # if seed is not None:  # for reproducibility over multiGPUs.
-            #     seed_cl1 = torch.max(seed * 0., seed - 100)
-            #     seed_cl2 = torch.max(seed * 0., seed - 500)
-            # else:
-            #     seed_cl1, seed_cl2 = None, None
-            out_pos = self.classify(x=x_pos, seed=seed, prngs_cuda=prngs_cuda)  # we do not use the same seed.
-            out_neg = self.classify(x=x_neg, seed=seed, prngs_cuda=prngs_cuda)  # we do not use the same seed.
+            scores_pos = self.classify(x=x_pos,
+                                    seed=seed,
+                                    prngs_cuda=prngs_cuda
+                                    )
+            scores_neg = self.classify(x=x_neg,
+                                    seed=seed,
+                                    prngs_cuda=prngs_cuda
+                                    )
 
-            return out_pos, out_neg, mask, scores_seg, maps_seg
+            return scores_pos, scores_neg, mask, cl_scores_seg
 
         if code == "get_mask_xpos_xneg":
             return self.get_mask_xpos_xneg(x, mask_c)
@@ -422,8 +444,8 @@ class ResNet(nn.Module):
         :return:
         """
         # 2. Prepare the mask for multiplication.
-        mask = self.get_pseudo_binary_mask(mask_c)  # detached!
-        x_pos, x_neg = self.apply_mask(x, mask)  # detached!
+        mask = self.get_pseudo_binary_mask(mask_c)
+        x_pos, x_neg = self.apply_mask(x, mask)
 
         return mask, x_pos, x_neg
 
@@ -435,17 +457,23 @@ class ResNet(nn.Module):
             2. The second plan represents the regions of interest (glands).
 
         :param x: tensor, input image with size (nb_batch, depth, h, w).
-        :param seed: int, seed for thread (to guarantee reproducibility over a fixed number of multigpus.)
+        :param seed: int, seed for thread (to guarantee reproducibility over
+        a fixed number of multigpus.)
         :return: (out_pos, out_neg, mask):
-            x_pos: tensor, the image with the mask applied. size (nb_batch, depth, h, w)
-            x_neg: tensor, the image with the complementary mask applied. size (nb_batch, depth, h, w)
-            out_pos: tuple of tensors, the output of the classification of the positive regions. (scores,
+            x_pos: tensor, the image with the mask applied.
+            size (nb_batch, depth, h, w)
+            x_neg: tensor, the image with the complementary mask applied.
+            size (nb_batch, depth, h, w)
+            out_pos: tuple of tensors, the output of the classification of the
+            positive regions. (scores,
             wildcat feature maps)
-            out_neg: tuple of tensors, the output of the classification of the negative regions. (scores,
+            out_neg: tuple of tensors, the output of the classification of the
+            negative regions. (scores,
             wildcat feature maps).
-            mask: tensor, the mask of each image in the batch. size (batch_size, 1, h, w) if evaluation mode is on or (
-            batch_size, 1, h*, w*) where h*, w* is the size of the input after downsampling (if the training mode is
-            on).
+            mask: tensor, the mask of each image in the batch. size
+            (batch_size, 1, h, w) if evaluation mode is on or (
+            batch_size, 1, h*, w*) where h*, w* is the size of the input after
+             downsampling (if the training mode is on).
         """
         b, _, h, w = x.shape
 
@@ -463,19 +491,33 @@ class ResNet(nn.Module):
         # x_16 = F.dropout(x_16, p=0.3, training=self.training, inplace=False)
         x_32 = self.layer4(x_16)   # 1 / 32: [n, 512/2048/--, 15, 15]   --> x2^5 to get back to 1.
 
-        scores, maps = self.headseg(x=x_32, seed=seed, prngs_cuda=prngs_cuda)
+        scores, maps = self.mask_head(x=x_32,
+                                      seed=seed,
+                                      prngs_cuda=prngs_cuda
+                                      )
 
         # compute M+
         prob = F.softmax(scores, dim=1)
-        mpositive = torch.zeros((b, 1, maps.size()[2], maps.size()[3]), dtype=maps.dtype, layout=maps.layout,
-                                device=maps.device)
+        mpositive = torch.zeros((b, 1, maps.size()[2], maps.size()[3]),
+                                dtype=maps.dtype,
+                                layout=maps.layout,
+                                device=maps.device
+                                )
         for i in range(b):  # for each sample
             for j in range(prob.size()[1]):  # sum the: prob(class) * mask(class)
                 mpositive[i] = mpositive[i] + prob[i, j] * maps[i, j, :, :]
 
-        mpos_inter = F.interpolate(input=mpositive, size=(h, w), mode='bilinear', align_corners=ALIGN_CORNERS).detach()
 
-        return mpos_inter, scores, maps
+        # does not work.
+        # mpositive = self.mask_head(x_32)  # todo: try x32, x16, both.
+
+        mpos_inter = F.interpolate(input=mpositive,
+                                   size=(h, w),
+                                   mode='bilinear',
+                                   align_corners=ALIGN_CORNERS
+                                   )
+
+        return mpos_inter, scores
 
     def classify(self, x, seed=None, prngs_cuda=None):
         # Resize the image first.
@@ -507,14 +549,15 @@ class ResNet(nn.Module):
         # Final
         scores, maps = scores32, maps32
 
-        return scores, maps
+        return scores
 
     def get_pseudo_binary_mask(self, x):
         """
         Compute a mask by applying a sigmoid function.
         The mask is not binary but pseudo-binary (values are close to 0/1).
 
-        :param x: tensor of size (batch_size, 1, h, w), contain the feature map representing the mask.
+        :param x: tensor of size (batch_size, 1, h, w), contain the feature
+         map representing the mask.
         :return: tensor, mask. with size (nbr_batch, 1, h, w).
         """
         x = (x - x.min()) / (x.max() - x.min())
@@ -527,10 +570,11 @@ class ResNet(nn.Module):
         :param x: tensor, input image. [size: (nb_batch, depth, h, w)]
         :param mask: tensor, mask. [size, (nbr_batch, 1, h, w)]
         :return: (x_pos, x_neg)
-            x_pos: tensor of size (nb_batch, depth, h, w) where only positive regions are shown (the negative regions
+            x_pos: tensor of size (nb_batch, depth, h, w) where only positive
+             regions are shown (the negative regions
             are set to zero).
-            x_neg: tensor of size (nb_batch, depth, h, w) where only negative regions are shown (the positive regions
-            are set to zero).
+            x_neg: tensor of size (nb_batch, depth, h, w) where only negative
+            regions are shown (the positive regions are set to zero).
         """
         mask_expd = mask.expand_as(x)
         x_pos = x * mask_expd
@@ -591,7 +635,7 @@ def resnet101(pretrained=False, **kwargs):
 
 
 def test_resnet():
-    model = resnet18(pretrained=True, num_masks=1, head=None)
+    model = resnet18(pretrained=True)
     print("Testing {}".format(model.__class__.__name__))
     model.train()
     print("Num. parameters: {}".format(sum([p.numel() for p in model.parameters()])))
@@ -608,11 +652,11 @@ def test_resnet():
     model.to(DEVICE)
     x = torch.randn(2, 3, 480, 480)
     x = x.to(DEVICE)
-    out_pos, out_neg, mask = model(x)
+    scores_pos, scores_neg, mask = model(x)
     print(x.size(), mask.size())
 
 
 if __name__ == "__main__":
     import sys
 
-    # test_resnet()
+    test_resnet()
