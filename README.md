@@ -6,9 +6,9 @@ For the code of the paper `Min-max Entropy for Weakly Supervised Pointwise
  -interpretability/tree/arxiv-1907.12934). We apologize for the inconvenience
  . We will fix this soon.
 
- 
+
 ### Pytorch code for: `Deep Interpretable Classification and Weakly-Supervised Segmentation of Histology Images via Max-Min Uncertainty`
- [(arxiv.org/abs/xxxx.xxxxx)](https://arxiv.org/abs/xxxx.xxxxx)
+ [(arxiv.org/abs/2011.07221)](https://arxiv.org/abs/2011.07221)
 
 * Citation:
 ```
@@ -16,7 +16,7 @@ For the code of the paper `Min-max Entropy for Weakly Supervised Pointwise
   title={Deep Interpretable Classification and Weakly-Supervised Segmentation of Histology Images via Max-Min Uncertainty},
   author={Belharbi, S. and Rony, J. and Dolz, J. and Ben Ayed, I. and McCaffrey, L. and Granger, E.},
   journal={CoRR},
-  volume={abs/XXXX.XXXX},
+  volume={abs/2011.07221},
   year={2020}
 }
 ```
